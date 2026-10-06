@@ -131,11 +131,26 @@
   function validateDrafts(value, cases, dataVersion) {
     if (!value || value.schemaVersion !== 1 || String(value.dataVersion) !== String(dataVersion) || !value.drafts || typeof value.drafts !== 'object' || Array.isArray(value.drafts)) throw new Error('작성 중 답안의 자료 버전 또는 형식이 맞지 않습니다.');
     const clean = {};
-    for (const [key, draft] of Object.entries(value.drafts)) {
+    for (const [key, storedDraft] of Object.entries(value.drafts)) {
+      let draft = storedDraft;
       const split = key.lastIndexOf(':');
       const caseId = key.slice(0, split); const stage = Number(key.slice(split + 1));
       const item = cases.find(c => c.id === caseId);
       if (!item || !/^[0-3]$/.test(key.slice(split + 1)) || !draft || typeof draft !== 'object' || typeof draft.hintUsed !== 'boolean' || typeof draft.modelShown !== 'boolean' || !draft.values || typeof draft.values !== 'object' || Array.isArray(draft.values) || !Array.isArray(draft.selected) || typeof draft.integrated !== 'string' || draft.integrated.length > 200000) throw new Error('작성 중 답안이 손상되어 있습니다.');
+      const revision = item.draftRevision || 1;
+      const storedRevision = draft.revision === undefined ? 1 : draft.revision;
+      if (!Number.isInteger(storedRevision) || storedRevision < 1) throw new Error('작성 중 답안의 수정 버전이 올바르지 않습니다.');
+      if (storedRevision !== revision) {
+        const map = item.draftPreviousHeadingMap;
+        if (storedRevision !== 1 || revision !== 2 || !Array.isArray(map)) throw new Error('작성 중 답안의 수정 버전이 맞지 않습니다.');
+        const values = {};
+        for (const [field, text] of Object.entries(draft.values)) {
+          const match = (stage === 0 ? /^(\d+):(\d+)$/ : /^(\d+)$/).exec(field);
+          if (!match || map[Number(match[1])] === undefined) throw new Error('작성 중 답안의 이전 입력값이 올바르지 않습니다.');
+          values[stage === 0 ? map[Number(match[1])] + ':' + match[2] : String(map[Number(match[1])])] = text;
+        }
+        draft = { ...draft, values, selected: draft.selected.filter(id => /^h\d+$/.test(id)).map(id => 'h' + map[Number(id.slice(1))]) };
+      }
       const allowed = stage === 0 ? blanks(item).map(b => b.key) : item.outline.map((_, i) => String(i));
       const values = {};
       for (const [field, text] of Object.entries(draft.values)) {
@@ -143,7 +158,7 @@
         values[field] = text;
       }
       if (draft.selected.length > item.outline.length + 3 || draft.selected.some(id => typeof id !== 'string' || !/^(?:h\d+|d[0-2])$/.test(id) || id.startsWith('h') && Number(id.slice(1)) >= item.outline.length)) throw new Error('작성 중 목차 선택이 올바르지 않습니다.');
-      clean[key] = { values, selected: [...new Set(draft.selected)], integrated: draft.integrated, hintUsed: draft.hintUsed || draft.modelShown, modelShown: draft.modelShown };
+      clean[key] = { values, selected: [...new Set(draft.selected)], integrated: draft.integrated, hintUsed: draft.hintUsed || draft.modelShown, modelShown: draft.modelShown, revision };
     }
     return clean;
   }
