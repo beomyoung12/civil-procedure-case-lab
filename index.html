@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#142a3a">
+  <meta name="description" content="민사소송법 사례를 진도별로, 답안 빈칸·쟁점 목차·키워드 회상·통합 답안의 네 단계로 연습합니다.">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23142a3a'/%3E%3Cpath d='M6 8h9v17H6zM17 8h9v17h-9z' fill='%23fff9e9'/%3E%3Cpath d='M9 12h3m-3 4h3m8-4h3m-3 4h3' stroke='%23b1843a' stroke-width='2'/%3E%3C/svg%3E">
+  <title>민사논증 연습실 · 민사소송법 사례학습</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./data.js"></script>
+  <script defer src="./grading.js"></script>
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문으로 건너뛰기</a>
+  <header class="app-header">
+    <a class="brand" href="#" aria-label="민사논증 연습실 처음으로"><span class="brand-mark" aria-hidden="true">民</span><span>민사논증 연습실<small>CIVIL PROCEDURE · CASE LAB</small></span></a>
+    <nav aria-label="주 메뉴"><button type="button" data-view="library" class="nav-button active">진도별 사례</button><button type="button" data-view="review" class="nav-button">복습 <span id="due-count" class="count">0</span></button><button type="button" data-view="bookmarks" class="nav-button">보관함</button><button type="button" id="records-button" class="nav-button">학습기록</button></nav>
+  </header>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="학습 진도"><div class="sidebar-caption">LEARNING PATH</div><h2>민사소송법 진도</h2><div id="unit-list"></div><p class="sidebar-note">사실관계 → 쟁점 → 법리 → 적용 → 결론<br>한 사례를 네 번 다르게 회상합니다.</p></aside>
+    <main id="main" tabindex="-1">
+      <div class="mobile-unit"><label for="unit-select">진도 선택</label><select id="unit-select"></select></div>
+      <div id="view"></div>
+      <noscript><div class="notice">이 학습앱을 사용하려면 브라우저의 JavaScript를 허용해 주세요.</div></noscript>
+    </main>
+  </div>
+  <div id="live-status" class="sr-only" role="status" aria-live="polite"></div>
+  <dialog id="records-dialog" aria-labelledby="records-title"><div class="dialog-head"><h2 id="records-title">학습기록 관리</h2><button type="button" data-close-dialog aria-label="창 닫기" class="icon-button">×</button></div><p>기록은 이 브라우저에만 저장됩니다. 다른 기기에서 이어 하려면 기록 파일을 내보내세요.</p><p id="storage-status" class="notice"></p><div id="records-summary"></div><div class="records-actions"><button type="button" id="export-records" class="primary">기록 내보내기</button><button type="button" id="import-trigger">기록 가져오기</button><input id="import-records" type="file" accept=".json,application/json" hidden></div><p class="small">가져오기는 현재 기록을 대체하고 작성 중 답안을 비웁니다. 같은 자료 버전만 허용되며 가져오기 전 확인합니다. 자동보관한 작성 중 답안은 이 기록 파일에 포함되지 않습니다.</p><button type="button" id="reset-records" class="danger-button">모든 학습기록·작성 답안 초기화</button></dialog>
+</body>
+</html>
