@@ -4,6 +4,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import argparse
 import webbrowser
+from urllib.request import urlopen
 
 
 class StudyHandler(SimpleHTTPRequestHandler):
@@ -23,6 +24,19 @@ class StudyHandler(SimpleHTTPRequestHandler):
         self.send_error(403, "Directory listing is disabled")
 
 
+class StudyServer(ThreadingHTTPServer):
+    # On Windows SO_REUSEADDR can permit a second listener on an occupied port.
+    allow_reuse_address = False
+
+
+def own_site_running(url):
+    try:
+        with urlopen(url, timeout=1) as response:
+            return "민사소송법 · 사례와 공통법리" in response.read(20000).decode("utf-8", errors="replace")
+    except (OSError, ValueError):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="민사논증 연습실 내부 서버")
     parser.add_argument("--port", type=int, default=4192)
@@ -30,9 +44,20 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parent
     handler = partial(StudyHandler, directory=str(root))
+    url = f"http://127.0.0.1:{args.port}/"
+    if own_site_running(url):
+        print(f"이미 실행 중입니다: {url}", flush=True)
+        if args.open:
+            webbrowser.open(url)
+        return
     try:
-        server = ThreadingHTTPServer(("127.0.0.1", args.port), handler)
+        server = StudyServer(("127.0.0.1", args.port), handler)
     except OSError as error:
+        if own_site_running(url):
+            print(f"이미 실행 중입니다: {url}", flush=True)
+            if args.open:
+                webbrowser.open(url)
+            return
         raise SystemExit(f"서버를 열지 못했습니다: {error}. 포트를 바꿔 실행할 수 있습니다: python serve.py --port 4193") from error
     url = f"http://127.0.0.1:{args.port}/"
     print(f"민사논증 연습실: {url}", flush=True)
