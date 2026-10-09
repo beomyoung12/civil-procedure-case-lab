@@ -1,14 +1,17 @@
 (() => {
   'use strict';
-  const D = window.CIVIL_DATA, R = window.READING_DATA, C = window.ReadingCore, F = window.READING_FOCUS, FC = window.FocusCore, RC = window.ReadableCore;
-  const T = window.READING_TRANSCRIPTS, TC = window.TranscriptCore;
+  const CC = window.ClassCore;
+  const combined = CC.merge(window.CIVIL_DATA,window.READING_DATA,window.READING_TRANSCRIPTS,window.READING_CLASS_DATA);
+  const D = combined.data, R = combined.reading, C = window.ReadingCore, F = window.READING_FOCUS, FC = window.FocusCore, RC = window.ReadableCore;
+  const T = combined.transcripts, TC = window.TranscriptCore;
+  const Q = window.READING_QUICK?.items || {};
   const key = 'civil-case-reading-v1', main = document.getElementById('main');
   const byId = new Map(D.cases.map(c => [c.id, c])), bySource = new Map(D.sources.map(s => [s.id, s]));
   const byGroup = new Map(R.groups.map(g => [g.id, g]));
   const esc = text => String(text ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-  let records = C.blank(), persistError = false, filter = { unit: 'all', query: '', sort: 'unit', scope: 'all', supplements: false };
+  let records = C.blank(), persistError = false, filter = { unit: 'all', query: '', sort: 'unit', scope: 'all', supplements: false, important:false };
   let modelOpen = false, originalOpen = false, mobilePane = 'problem', toastTimer, activeCase = null, lastView = 'library';
-  let pageViews = {}, importPending = false;
+  let pageViews = {}, importPending = false, lawMode = 'quick';
   try { const old = localStorage.getItem(key); if (old) records = C.validate(JSON.parse(old), new Set(byId.keys()), new Set(byGroup.keys())); }
   catch { persistError = true; try { const damaged = localStorage.getItem(key); if(damaged) localStorage.setItem(key+'-backup-'+Date.now(),damaged); } catch {} }
   filter.unit = records.unit;
@@ -30,36 +33,59 @@
   function go(hash) { saveDraft(); if (location.hash === hash) render(); else location.hash = hash; }
   function unitName(id) { return D.units.find(u => u.id === id)?.title || '전체 단원'; }
   function unitCode(id) { return String(Number(id.slice(1))).padStart(2, '0'); }
-  function visible(c) { return filter.supplements || !R.cases[c.id].supplement; }
+  function visible(c) { return (filter.supplements || !R.cases[c.id].supplement) && CC.inView(c,lastView) && (!filter.important || c.important); }
+  function importantBadge(c) { return c.important ? '<span class="tag important">중요 · 수업문제</span>' : ''; }
   function tags(c) {
-    return `<span class="tag">${esc(c.year || '정리자료')}</span><span class="tag ${R.cases[c.id].hasPrimaryModelAnswer ? '' : 'warn'}">${R.cases[c.id].hasModelAnswer ? (R.cases[c.id].hasPrimaryModelAnswer ? '원문 답안 수록' : '관련 법리 대조답안') : R.cases[c.id].supplement ? '보충 연습' : '문제만 수록'}</span>${c.caution ? '<span class="tag warn">주의사항 있음</span>' : ''}`;
+    return `${importantBadge(c)}<span class="tag">${esc(c.year || '정리자료')}</span><span class="tag ${R.cases[c.id].hasPrimaryModelAnswer ? '' : 'warn'}">${R.cases[c.id].hasModelAnswer ? (R.cases[c.id].hasPrimaryModelAnswer ? '원문 답안 수록' : '관련 법리 대조답안') : R.cases[c.id].supplement ? '보충 연습' : '문제만 수록'}</span>${c.caution ? '<span class="tag warn">주의사항 있음</span>' : ''}`;
   }
   function sidebar(laws) {
-    const count = id => laws ? R.groups.filter(g => g.unit === id).length : D.cases.filter(c => visible(c) && c.unit === id).length;
-    return `<aside class="sidebar" aria-label="진도별 단원"><h2>진도 순서</h2><button class="unit ${filter.unit === 'all' ? 'active' : ''}" data-unit="all">전체 단원<span class="number">${laws ? R.groups.length : D.cases.filter(visible).length}</span></button>${D.units.map(u => `<button class="unit ${filter.unit === u.id ? 'active' : ''}" data-unit="${u.id}"><span><span class="number">${unitCode(u.id)}</span> ${esc(u.title)}</span><span class="number">${count(u.id)}</span></button>`).join('')}</aside>`;
+    const items = laws ? R.groups.filter(g=>!filter.important||g.important) : D.cases.filter(visible);
+    const counts = id => C.unitCounts(items,id);
+    const badge = id => {
+      const n=counts(id),label=laws?'묶음':'문제',importantLabel=laws?'수업 연결':'중요';
+      return `<span class="unit-counts" aria-label="총 ${n.total}${label}, ${importantLabel} ${n.important}${label}"><span class="number">${n.total}${label}</span><span class="unit-important ${n.important?'':'is-zero'}">${importantLabel} ${n.important}</span></span>`;
+    };
+    return `<aside class="sidebar" aria-label="진도별 단원"><h2>${laws?'진도 순서 · 법리 / 수업 연결':'진도 순서 · 전체 / 중요'}</h2><button class="unit ${filter.unit === 'all' ? 'active' : ''}" data-unit="all"><span>전체 단원</span>${badge('all')}</button>${D.units.filter(u=>lastView!=='classes'||counts(u.id).total>0).map(u => `<button class="unit ${filter.unit === u.id ? 'active' : ''}" data-unit="${u.id}"><span><span class="number">${unitCode(u.id)}</span> ${esc(u.title)}</span>${badge(u.id)}</button>`).join('')}</aside>`;
   }
   function filters(laws) {
-    return `<div class="filters"><input id="search" type="search" aria-label="문제·법리 검색" placeholder="${laws ? '공통법리·관련 문제 검색' : '문제 제목·내용·출처 검색'}" value="${esc(filter.query)}"><select id="sort" aria-label="정렬"><option value="unit" ${filter.sort === 'unit' ? 'selected' : ''}>진도 순서</option><option value="repeat" ${filter.sort === 'repeat' ? 'selected' : ''}>${laws ? '연결 사례 많은 순' : '최신 출제연도 순'}</option></select><select id="scope" aria-label="학습 여부"><option value="all">전체</option><option value="new" ${filter.scope === 'new' ? 'selected' : ''}>공부 전</option><option value="studied" ${filter.scope === 'studied' ? 'selected' : ''}>공부한 것</option><option value="draft" ${filter.scope === 'draft' ? 'selected' : ''}>작성한 답안 있음</option></select>${laws ? '' : `<label><input type="checkbox" id="supplements" ${filter.supplements ? 'checked' : ''}>정리자료 보충 8개 포함</label>`}</div>`;
+    return `<div class="filters"><input id="search" type="search" aria-label="문제·법리 검색" placeholder="${laws ? '공통법리·관련 문제 검색' : '문제 제목·내용·출처 검색'}" value="${esc(filter.query)}">
+      <select id="sort" aria-label="정렬"><option value="unit" ${filter.sort === 'unit' ? 'selected' : ''}>진도 순서</option><option value="repeat" ${filter.sort === 'repeat' ? 'selected' : ''}>${laws ? '연결 사례 많은 순' : lastView==='classes'?'수업 주차 순':'최신 출제연도 순'}</option></select>
+      <select id="scope" aria-label="학습 여부"><option value="all">전체</option><option value="new" ${filter.scope === 'new' ? 'selected' : ''}>공부 전</option><option value="studied" ${filter.scope === 'studied' ? 'selected' : ''}>공부한 것</option><option value="draft" ${filter.scope === 'draft' ? 'selected' : ''}>작성한 답안 있음</option></select>
+      ${lastView==='classes'?'':`<label><input type="checkbox" id="important-only" ${filter.important?'checked':''}>중요 수업자료${laws?' 포함 법리':''}만</label>`}
+      ${laws||lastView==='classes' ? '' : `<label><input type="checkbox" id="supplements" ${filter.supplements ? 'checked' : ''}>정리자료 보충 8개 포함</label>`}</div>`;
   }
   function matches(text) { return !filter.query || text.toLowerCase().includes(filter.query.toLowerCase()); }
   function allowedStudy(done, draft = false) { return filter.scope === 'all' || filter.scope === 'new' && !done || filter.scope === 'studied' && done || filter.scope === 'draft' && draft; }
-  function library(laws) {
-    const title = laws ? '한 번 익히고, 여러 사례에 적용하기' : '단원별 사례 문제';
-    main.innerHTML = `<section class="hero"><div><p class="eyebrow">${laws ? 'COMMON RULES' : 'CASE PRACTICE'}</p><h1>${title}</h1><p>${laws ? '반복되는 법리를 묶고, 조건이 달라지는 사례를 함께 연결했습니다. 연결 수는 이 자료 안의 학습사례 수이며 실제 출제 횟수는 아닙니다.' : '문제를 골라 왼쪽에서 읽고 오른쪽에 답안을 작성하세요. 모범답안 버튼을 누르면 오른쪽이 교수님 자료 원문으로 바뀝니다.'}</p></div><div class="stats"><div><strong>18</strong><span>단원</span></div><div><strong>107</strong><span>사례분류</span></div><div><strong>${R.groups.length}</strong><span>법리 묶음</span></div></div></section>${records.lastCase ? `<p class="continuation"><button class="quiet" data-case="${esc(records.lastCase)}">이어서 쓰기 · ${esc(byId.get(records.lastCase).title)}</button></p>` : ''}<div class="workspace">${sidebar(laws)}<section>${filters(laws)}<div id="results"></div></section></div>`;
+  function quickMarkup(g) {
+    const q=Q[g.id];
+    if(!q)return '<p class="notice">빠른 문답이 없는 묶음입니다. 자세한 법리를 확인하세요.</p>';
+    return `<div class="quick-question"><span class="qa-letter" aria-hidden="true">Q</span><h3>${esc(q.question)}</h3></div><details class="quick-answer"><summary>한 문장 답 보기</summary><div class="quick-answer-body"><p class="quick-answer-text"><span class="qa-letter" aria-hidden="true">A</span>${esc(q.answer)}</p><p class="quick-caution"><strong>구별할 점</strong> ${esc(q.caution)}</p><small>학습용 요약 · 원문 인용 아님</small></div></details>`;
+  }
+  function lawToolbar() {
+    return `<div class="law-toolbar"><div class="law-modes" role="group" aria-label="법리 보기 방식"><button data-law-mode="quick" aria-pressed="${lawMode==='quick'}" class="${lawMode==='quick'?'active':''}">빠른 문답</button><button data-law-mode="detail" aria-pressed="${lawMode==='detail'}" class="${lawMode==='detail'?'active':''}">자세한 법리 목록</button></div>${lawMode==='quick'?'<div class="quick-tools"><button data-quick-all="show">답 모두 보기</button><button data-quick-all="hide">답 모두 가리기</button></div>':''}</div>`;
+  }
+  function library(laws, view=lastView==='classes'?'classes':'library') {
+    lastView=laws?'laws':view;
+    const classes=lastView==='classes', count=D.cases.filter(c=>!R.cases[c.id].supplement&&CC.inView(c,lastView)).length;
+    if(classes&&filter.unit!=='all'&&!D.cases.some(c=>CC.isClass(c)&&c.unit===filter.unit))filter.unit='all';
+    const title = laws ? '한 번 익히고, 여러 사례에 적용하기' : classes ? '수업 문제만, 진도 순서대로' : '단원별 사례 문제';
+    const weeks=CC.weekRange(D.cases);
+    main.innerHTML = `<section class="hero"><div><p class="eyebrow">${laws ? 'COMMON RULES' : classes?'CLASS PRACTICE':'CASE PRACTICE'}</p><h1>${title}</h1><p>${laws ? '반복되는 법리를 묶고, 조건이 달라지는 사례를 함께 연결했습니다. 연결 수는 이 자료 안의 학습사례 수이며 실제 출제 횟수는 아닙니다.' : classes?`${weeks}주차 수업 문제·답안을 단원별로 모았습니다. 중요 표시는 수업자료의 우선학습 표시이며 출제확률 통계가 아닙니다.`:'기존 사례와 중요 수업 문제를 함께 봅니다. 왼쪽 문제를 읽고 오른쪽에 답안을 쓴 뒤 모범답안과 대조하세요.'}</p></div><div class="stats"><div><strong>${classes?new Set(D.cases.filter(CC.isClass).map(c=>c.unit)).size:D.units.length}</strong><span>단원</span></div><div><strong>${count}</strong><span>${classes?'수업 설문':'사례분류'}</span></div><div><strong>${classes?weeks:R.groups.length}</strong><span>${classes?'수업 주차':'법리 묶음'}</span></div></div></section>${records.lastCase && (!classes||CC.isClass(byId.get(records.lastCase))) ? `<p class="continuation"><button class="quiet" data-case="${esc(records.lastCase)}">이어서 쓰기 · ${esc(byId.get(records.lastCase).title)}</button></p>` : ''}<div class="workspace">${sidebar(laws)}<section>${filters(laws)}<div id="results"></div></section></div>`;
     bindLibrary(laws); updateResults(laws);
   }
   function updateResults(laws) {
     const container = document.getElementById('results'); if (!container) return;
     if (laws) {
-      const groups = R.groups.filter(g => (filter.unit === 'all' || g.unit === filter.unit) && matches([g.title,g.focus,g.guide?.issue,g.guide?.rule,g.guide?.limits,...(g.guide?.checks||[]),...(g.guide?.articles||[]).map(a=>`제${a}조`),...g.members.map(id => byId.get(id).title)].join(' ')) && allowedStudy(!!records.lawStudied[g.id], g.members.some(id => !!records.drafts[id]?.text)));
+      const groups = R.groups.filter(g => (!filter.important||g.important) && (filter.unit === 'all' || g.unit === filter.unit) && matches([g.title,g.focus,g.guide?.issue,g.guide?.rule,g.guide?.limits,Q[g.id]?.question,Q[g.id]?.answer,Q[g.id]?.caution,...(g.guide?.checks||[]),...(g.guide?.articles||[]).map(a=>`제${a}조`),...g.members.map(id => byId.get(id).title)].join(' ')) && allowedStudy(!!records.lawStudied[g.id], g.members.some(id => !!records.drafts[id]?.text)));
       if (filter.sort === 'repeat') groups.sort((a,b) => b.caseCount - a.caseCount);
       else groups.sort((a,b) => a.unit.localeCompare(b.unit));
-      container.innerHTML = `<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${groups.length}개 묶음</small></div><div class="cards">${groups.map(g => `<article class="card"><div class="tags"><span class="tag">${esc(unitName(g.unit))}</span><span class="tag">관련 사례 ${g.caseCount}개</span>${records.lawStudied[g.id] ? '<span class="tag">공부함</span>' : ''}</div><h3>${esc(g.title)}</h3><p>${esc(g.guide?.issue || g.focus)}</p><div class="card-footer"><small>판단 기준·요건·예외 · 원문 대조</small><button data-law="${g.id}">모아 공부</button></div></article>`).join('')}</div>`;
+      container.innerHTML = `${lawToolbar()}<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${groups.length}개 묶음</small></div>${lawMode==='quick'?'<p class="quick-instruction">질문을 보고 답을 떠올린 뒤 펼쳐 보세요. 짧은 답과 구별할 점을 함께 확인하고, 헷갈리면 자세한 법리·원문으로 이동하세요.</p>':''}<div class="cards ${lawMode==='quick'?'quick-cards':''}">${groups.map(g => `<article class="card ${lawMode==='quick'?'quick-card':''}" data-law-card="${g.id}"><div class="tags"><span class="tag">${esc(unitName(g.unit))}</span><span class="tag">관련 사례 ${g.caseCount}개</span>${g.important?`<span class="tag important">중요 · 수업 ${g.classCount}개</span>`:''}${records.lawStudied[g.id] ? '<span class="tag">공부함</span>' : ''}</div>${lawMode==='quick'?quickMarkup(g):`<h3>${esc(g.title)}</h3><p>${esc(g.guide?.issue || g.focus)}</p>`}<div class="card-footer"><small>${esc(g.title)}</small><button data-law="${g.id}">자세한 법리·원문</button></div></article>`).join('')}</div>`;
       if (!groups.length) container.innerHTML += '<p class="empty">조건에 맞는 법리 묶음이 없습니다.</p>';
     } else {
       const cases = D.cases.filter(c => visible(c) && (filter.unit === 'all' || c.unit === filter.unit) && matches([c.title,c.facts,c.prompt,c.year,bySource.get(c.sourceId).name].join(' ')) && allowedStudy(!!records.studied[c.id],!!records.drafts[c.id]?.text));
-      if (filter.sort === 'repeat') cases.sort((a,b) => Number((b.year||'').match(/20\d{2}/)?.[0]||0)-Number((a.year||'').match(/20\d{2}/)?.[0]||0));
-      container.innerHTML = `<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${cases.length}개 사례분류</small></div><div class="case-list">${cases.map(c => `<article class="case-row"><span class="case-number">${esc(c.id.toUpperCase())}</span><div><h3>${esc(c.title)}</h3><div class="tags"><span class="tag">${esc(unitName(c.unit))}</span>${tags(c)}</div></div><span class="small row-status">${records.studied[c.id] ? '공부함' : records.drafts[c.id]?.text ? '답안 작성 중' : '아직 쓰지 않음'}</span><button data-case="${c.id}">${records.drafts[c.id]?.text ? '이어서 쓰기' : '문제 풀기'}</button></article>`).join('')}</div>`;
+      if (filter.sort === 'repeat') cases.sort(lastView==='classes'?(a,b)=>a.classKey.localeCompare(b.classKey,'ko',{numeric:true}):(a,b)=>Number((b.year||'').match(/20\d{2}/)?.[0]||0)-Number((a.year||'').match(/20\d{2}/)?.[0]||0));
+      else cases.sort((a,b)=>a.unit.localeCompare(b.unit)||Number(!!b.important)-Number(!!a.important));
+      container.innerHTML = `<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${cases.length}개 사례분류 <span class="result-important">· 중요 ${cases.filter(c=>c.important).length}개</span></small></div><div class="case-list">${cases.map(c => `<article class="case-row"><span class="case-number">${CC.isClass(c)?'수업':esc(c.id.toUpperCase())}</span><div><h3>${esc(c.title)}</h3><div class="tags"><span class="tag">${esc(unitName(c.unit))}</span>${tags(c)}</div></div><span class="small row-status">${records.studied[c.id] ? '공부함' : records.drafts[c.id]?.text ? '답안 작성 중' : '아직 쓰지 않음'}</span><button data-case="${c.id}">${records.drafts[c.id]?.text ? '이어서 쓰기' : '문제 풀기'}</button></article>`).join('')}</div>`;
       if (!cases.length) container.innerHTML += '<p class="empty">조건에 맞는 문제가 없습니다.</p>';
     }
   }
@@ -67,6 +93,7 @@
     document.getElementById('search').addEventListener('input', e => { filter.query = e.target.value; updateResults(laws); });
     for (const type of ['sort','scope']) document.getElementById(type).addEventListener('change', e => { filter[type] = e.target.value; updateResults(laws); });
     document.getElementById('supplements')?.addEventListener('change', e => { filter.supplements = e.target.checked; library(false); });
+    document.getElementById('important-only')?.addEventListener('change',e=>{filter.important=e.target.checked;library(laws);});
   }
   function refsFor(c) {
     let refs = [R.cases[c.id].primary,...R.cases[c.id].related].filter(r => bySource.has(r.sourceId));
@@ -121,14 +148,15 @@
     const caution=role==='answer'&&c.caution ? `<details class="notice"><summary>학습용 주의사항 · 법리 변경 등</summary><p>${esc(c.caution)}</p></details>` : '';
     const controls=`<div class="source-tools">${refs.length>1?`<select data-transcript-source="${slot}" aria-label="교정 TXT 자료">${refs.map((r,i)=>`<option value="${i}" ${r===ref?'selected':''}>${esc(bySource.get(r.sourceId).name)}</option>`).join('')}</select>`:ref?`<span class="small">${esc(bySource.get(ref.sourceId).name)}</span>`:''}<button data-transcript-original="${slot}">원본·쪽별 대조</button>${ref?`<a href="${esc(bySource.get(ref.sourceId).url)}#page=${ref.pages[0]}" target="_blank" rel="noopener">전체 PDF ↗</a>`:''}</div>`;
     if(!ref)return `${controls}<div class="panel-body"><p class="notice">${esc(row.notice||'이 구간의 교정 TXT가 없습니다.')}</p></div>`;
-    return `${comparison}${caution}${controls}<div class="model-body"><p class="focus-caption">${role==='question'?'문제 본문':'자료 수록 답안'} · 교정 TXT<span>PDF ${ref.pages.join(', ')}쪽</span></p><p class="text-notice">문맥상 오타·한자 표기·줄바꿈을 정리한 TXT 기준입니다. 원본 이미지 대조 확정본은 아닙니다.${row.contextIncluded?' 설문 경계 미지정 부분은 공통 문맥·인접 설문을 포함합니다.':''}</p>${ref.segments.map(s=>transcriptText(s.text,quote)).join('<div class="section-divider">같은 자료의 다음 연결 구간</div>')}</div>`;
+    const notice=row.imageReviewed?'수업 PDF 이미지와 대조한 교정 TXT입니다. 오타·줄바꿈을 정리하고 법리·결론은 원문 기준으로 보존했습니다.':'문맥상 오타·한자 표기·줄바꿈을 정리한 TXT 기준입니다. 원본 이미지 대조 확정본은 아닙니다.';
+    return `${comparison}${caution}${controls}<div class="model-body"><p class="focus-caption">${role==='question'?'문제 본문':'자료 수록 답안'} · 교정 TXT<span>PDF ${ref.pages.join(', ')}쪽</span></p><p class="text-notice">${notice}${row.contextIncluded?' 설문 경계 미지정 부분은 공통 문맥·인접 설문을 포함합니다.':''}</p>${ref.segments.map(s=>transcriptText(s.text,quote)).join('<div class="section-divider">같은 자료의 다음 연결 구간</div>')}</div>`;
   }
   function sourceViewer(c, slot, startAnswer = false, custom) {
     const transcript=TC.role(T,c.id,slot==='problem'?'question':'answer');
     if(!custom&&transcript&&!pageViews[slot]?.original)return transcriptViewer(c,slot);
     const refs = custom ? [custom] : refsFor(c);
     if (!pageViews[slot] || pageViews[slot].ref == null) {
-      const chosen=TC.choice(transcript,pageViews[slot]?.transcriptSource),preferred=refs.findIndex(r=>r.sourceId===chosen?.sourceId);
+      const chosen=TC.choice(transcript,pageViews[slot]?.transcriptSource),preferred=CC.sourceRefIndex(refs,chosen);
       const refIndex = !custom&&preferred>=0 ? preferred : (startAnswer||slot!=='problem')&&!custom ? R.cases[c.id].answerRefIndex : 0;
       const items = viewerItems(c,slot,refs[refIndex].sourceId,custom);
       pageViews[slot] = { ...pageViews[slot], ref: refIndex, focus: !!items.length, page: items[0]?.page || (startAnswer && refs[refIndex].pages.includes(R.cases[c.id].answerStart) ? R.cases[c.id].answerStart : refs[refIndex].pages[0]) };
@@ -157,11 +185,14 @@
   function reading(c) {
     activeCase = c.id; records.lastCase = c.id; persist();
     const related = R.groups.filter(g => g.members.includes(c.id));
-    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${lastView === 'laws' ? '반복 법리 목록' : '단원별 문제 목록'}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="mobile-switch"><button id="mobile-problem" class="${mobilePane === 'problem' ? 'active' : ''}">문제</button><button id="mobile-answer" class="${mobilePane === 'answer' ? 'active' : ''}">답안 작성·모범답안</button></div><div class="reading-grid"><section class="panel problem ${mobilePane !== 'problem' ? 'mobile-hidden' : ''}" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${originalOpen ? '문제 요지로 돌아가기' : '원문 문제 보기'}</button></div><div id="problem-content">${originalOpen ? sourceViewer(c,'problem') : `<div class="panel-body"><p class="small">학습용 문제 요지입니다. 교수님이 쓴 정확한 문제 문장은 ‘원문 문제 보기’에서 확인할 수 있습니다.</p><p>${esc(c.facts).replace(/\n/g,'<br>')}</p><p class="question">${esc(c.prompt).replace(/\n/g,'<br>')}</p></div>`}</div></section><section class="panel ${mobilePane !== 'answer' ? 'mobile-hidden' : ''}" id="answer-panel"><div class="panel-head"><h2 id="answer-title">${modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : '내 답안'}</h2><div class="tools"><button id="toggle-answer" class="primary">${modelOpen ? '내 답안으로 돌아가기' : R.cases[c.id].hasModelAnswer ? '모범답안 보기' : '원문 자료 보기'}</button></div></div><div id="answer-content">${modelOpen ? modelMarkup(c) : editor(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
+    const backLabel={laws:'반복 법리 목록',classes:'수업 문제 목록',library:'단원별 문제 목록'}[lastView];
+    const problemButton=originalOpen?'문제 요지로 돌아가기':'원문 문제 보기';
+    const problemContent=originalOpen ? sourceViewer(c,'problem') : `<div class="panel-body"><p class="small">학습용 문제 요지입니다. 교수님이 쓴 정확한 문제 문장은 ‘원문 문제 보기’에서 확인할 수 있습니다.</p><p>${esc(c.facts).replace(/\n/g,'<br>')}</p><p class="question">${esc(c.prompt).replace(/\n/g,'<br>')}</p></div>`;
+    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="mobile-switch"><button id="mobile-problem" class="${mobilePane === 'problem' ? 'active' : ''}">문제</button><button id="mobile-answer" class="${mobilePane === 'answer' ? 'active' : ''}">답안 작성·모범답안</button></div><div class="reading-grid"><section class="panel problem ${mobilePane !== 'problem' ? 'mobile-hidden' : ''}" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section><section class="panel ${mobilePane !== 'answer' ? 'mobile-hidden' : ''}" id="answer-panel"><div class="panel-head"><h2 id="answer-title">${modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : '내 답안'}</h2><div class="tools"><button id="toggle-answer" class="primary">${modelOpen ? '내 답안으로 돌아가기' : R.cases[c.id].hasModelAnswer ? '모범답안 보기' : '원문 자료 보기'}</button></div></div><div id="answer-content">${modelOpen ? modelMarkup(c) : editor(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
     bindReading(c);
   }
   function neighborButtons(c) {
-    const same = D.cases.filter(x => x.unit === c.unit && !R.cases[x.id].supplement), index = same.findIndex(x => x.id === c.id);
+    const same = D.cases.filter(x => x.unit === c.unit && !R.cases[x.id].supplement && CC.inView(x,lastView)), index = same.findIndex(x => x.id === c.id);
     return `${index > 0 ? `<button data-case="${same[index-1].id}">← 같은 단원 이전 문제</button>` : ''}${index >= 0 && index < same.length-1 ? `<button data-case="${same[index+1].id}">같은 단원 다음 문제 →</button>` : ''}`;
   }
   function editor(c) { const draft = records.drafts[c.id] || {}; return `<textarea class="draft" id="answer-input" aria-label="내 답안 입력" placeholder="여기에 답안을 써보세요.\n\n문제의 소재 → 법리 → 사안의 적용 → 결론\n\n모범답안을 열어도 작성 내용은 사라지지 않습니다.">${esc(draft.text || '')}</textarea><div class="save-line"><span id="save-status">${persistError ? '저장 실패 · 내보내기 필요' : '자동 저장 준비됨'}${draft.viewed ? ' · 원문 열람한 답안' : ''}</span><span id="char-count">${(draft.text||'').length.toLocaleString()}자</span></div>`; }
@@ -171,7 +202,7 @@
   }
   function lawQuoteMarkup(q,i) {
     const c=byId.get(q.caseId),fixed=TC.quote(T,q);
-    return `<article class="quote-context"><h3>${esc(c.title)}</h3><p class="small">사안의 요지 · ${esc(c.facts)}</p><p class="small">${fixed?'교정 TXT의 해당 문구':'교정 전 검수 발췌 · 원본 대조 필요'}</p><blockquote class="quote">${esc(fixed?.text||q.text)}</blockquote><div class="quote-source">${esc(bySource.get(q.sourceId).name)} · PDF ${q.sourcePages.join(', ')}쪽 · <button class="quiet" data-quote="${q.caseId}" data-qindex="${i}" data-qsource="${q.sourceId}" data-qpage="${q.sourcePages[0]}">본문 대조</button></div></article>`;
+    return `<article class="quote-context"><h3>${esc(c.title)}</h3>${importantBadge(c)}<details><summary>사안의 요지 · 학습용</summary><p class="small">${esc(c.facts)}</p><p>${esc(c.prompt)}</p></details><p class="small">${fixed?'교정 TXT의 해당 문구':'교정 전 검수 발췌 · 원본 대조 필요'}</p><blockquote class="quote">${esc(fixed?.text||q.text)}</blockquote><div class="quote-source">${esc(bySource.get(q.sourceId).name)} · PDF ${q.sourcePages.join(', ')}쪽 · <button class="quiet" data-quote="${q.caseId}" data-qindex="${i}" data-qsource="${q.sourceId}" data-qpage="${q.sourcePages[0]}">본문 대조</button></div></article>`;
   }
   function bindReading(c) {
     document.getElementById('answer-input')?.addEventListener('input', saveDraft);
@@ -186,7 +217,11 @@
       document.getElementById('answer-input')?.addEventListener('input', saveDraft);
       bindImages();
     });
-    document.getElementById('problem-source').addEventListener('click', () => { saveDraft(); originalOpen = !originalOpen; reading(c); });
+    document.getElementById('problem-source').addEventListener('click', () => {
+      saveDraft();
+      originalOpen=!originalOpen;
+      reading(c);
+    });
     for (const pane of ['problem','answer']) document.getElementById('mobile-'+pane).addEventListener('click', () => {
       mobilePane = pane;
       document.getElementById('problem-panel').classList.toggle('mobile-hidden', pane !== 'problem');
@@ -197,11 +232,11 @@
     bindImages();
   }
   function law(g) {
-    const members = g.members.map(id => byId.get(id)), originals = members.filter(c => R.cases[c.id].hasModelAnswer);
+    const members = g.members.map(id => byId.get(id)).sort((a,b)=>Number(!!b.important)-Number(!!a.important)), originals = members.filter(c => R.cases[c.id].hasModelAnswer);
     const selected = pageViews.lawCase && members.find(c => c.id === pageViews.lawCase) || originals[0] || members[0];
     pageViews.lawCase = selected.id;
     main.innerHTML = `<button class="back quiet" data-back="laws">← 반복 법리 목록</button>
-      <div class="reading-heading"><div><p class="eyebrow">${unitCode(g.unit)} · ${esc(unitName(g.unit))}</p><h1>${esc(g.title)}</h1><p class="small">관련 사례 ${g.caseCount}개 · 법리 → 사례 적용 → 원문 대조</p></div><label class="studied"><input id="law-studied" type="checkbox" ${records.lawStudied[g.id] ? 'checked' : ''}>이 묶음 공부함</label></div>
+      <div class="reading-heading"><div><p class="eyebrow">${unitCode(g.unit)} · ${esc(unitName(g.unit))}</p><h1>${esc(g.title)}</h1>${g.important?`<div class="tags"><span class="tag important">중요 · 수업 설문 ${g.classCount}개 연결</span></div>`:''}<p class="small">관련 사례 ${g.caseCount}개 · 법리 → 사례 적용 → 원문 대조</p></div><label class="studied"><input id="law-studied" type="checkbox" ${records.lawStudied[g.id] ? 'checked' : ''}>이 묶음 공부함</label></div>
       <div class="law-layout"><section class="panel"><div class="panel-head"><h2>쟁점과 판단 기준</h2><small>보충한 학습용 정리 · 원문 아님</small></div><div class="panel-body">
       ${guideMarkup(g)}
       <details class="law-evidence"><summary>사례 속 자료 발췌 ${g.quotes.length}개 · 문맥과 함께 확인</summary>${g.quotes.length ? g.quotes.map(lawQuoteMarkup).join('') : '<p>별도로 검수된 텍스트 발췌가 없습니다. 오른쪽 관련 사례 본문에서 확인하세요.</p>'}</details>
@@ -216,6 +251,7 @@
     const guide = g.guide;
     if (!guide) return '<p class="notice">법리 보충 정리를 불러오지 못했습니다. 원문 자료를 확인하세요.</p>';
     return `<div class="rule-guide">
+      <section class="law-quick-intro" aria-label="이 법리의 빠른 문답">${quickMarkup(g)}</section>
       <section><h3>어떤 때 쟁점이 되는가</h3><p>${esc(guide.issue)}</p></section>
       <section class="rule-main"><h3>판단의 기준</h3><p>${esc(guide.rule)}</p></section>
       <section><h3>확인할 요건·판단 순서</h3><ol>${guide.checks.map(t=>`<li>${esc(t)}</li>`).join('')}</ol></section>
@@ -224,7 +260,7 @@
       <p class="rule-flow">${esc(guide.flow)}</p>
       <div class="rule-sources"><span>관련 조문·확인 근거</span>${(guide.articles||[]).map(a=>`<a href="https://www.law.go.kr/법령/민사소송법/제${a}조" target="_blank" rel="noopener">민사소송법 제${a}조 ↗</a>`).join('')}${(guide.extraSources||[]).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)} ↗</a>`).join('')}</div>
       ${guide.application ? `<div class="rule-application"><h3>법리를 이 사례에 적용하면</h3><p>${esc(guide.application.text)}</p><button class="quiet" data-case="${guide.application.caseId}">해당 사례에서 연습 →</button></div>` : ''}
-      <p class="guide-provenance">교수님 자료를 바탕으로 일반 법리를 보충한 학습용 정리입니다. 원문 인용은 아래 발췌·오른쪽 원문과 구별하며, 확인한 판례변경은 별도로 표시합니다.</p>
+      <p class="guide-provenance">${esc(guide.sourceLabel||'교수님 자료를 바탕으로 일반 법리를 보충한 학습용 정리입니다. 원문 인용은 아래 발췌·오른쪽 원문과 구별하며, 확인한 판례변경은 별도로 표시합니다.')}</p>
     </div>`;
   }
   function currentViewer(slot) {
@@ -246,8 +282,13 @@
     main.querySelectorAll('[data-page-select]').forEach(el => { el.onchange = () => { const slot = el.dataset.pageSelect; pageViews[slot].page = +el.value; refreshViewer(slot); }; });
     main.querySelectorAll('img.source-image').forEach(img => { img.onerror = () => { img.alt = '원문 이미지가 없습니다. 위의 전체 PDF 링크로 확인하세요.'; toast('원문 이미지가 없어 전체 PDF로 확인해야 합니다.'); }; });
   }
+  main.addEventListener('toggle', e => {
+    if (e.target.matches?.('.quick-answer')) e.target.querySelector('summary').textContent=e.target.open?'답 가리기':'한 문장 답 보기';
+  },true);
   main.addEventListener('click', e => {
     const el = e.target.closest('button,[data-zoom]'); if (!el) return;
+    if (el.dataset.lawMode) { lawMode=el.dataset.lawMode==='detail'?'detail':'quick'; updateResults(true); }
+    if (el.dataset.quickAll) main.querySelectorAll('.quick-answer').forEach(answer=>{answer.open=el.dataset.quickAll==='show';});
     if (el.dataset.case) { modelOpen = false; originalOpen = false; mobilePane = 'problem'; pageViews = {}; go('#case/'+el.dataset.case); }
     if (el.dataset.law) { pageViews = {}; go('#law/'+el.dataset.law); }
     if (el.dataset.back) go('#'+el.dataset.back);
@@ -283,13 +324,14 @@
     }
   });
   function render() {
-    const [route, id] = location.hash.slice(1).split('/');
+    const [route, rawId] = location.hash.slice(1).split('/'),id=CC.routeId(rawId);
     // Direct case links and browser history must not reuse another case's PDF/page choice.
     if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;mobilePane='problem';}
-    document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === (route === 'law' ? 'laws' : route === 'case' ? 'library' : route || 'library')));
+    const view=route==='law'?'laws':route==='case'?lastView:['laws','classes'].includes(route)?route:'library';
+    document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
     if (route === 'case' && byId.has(id)) reading(byId.get(id));
-    else if (route === 'law' && byGroup.has(id)) { activeCase = null; law(byGroup.get(id)); }
-    else { activeCase = null; lastView = route === 'laws' ? 'laws' : 'library'; library(route === 'laws'); }
+    else if (route === 'law' && byGroup.has(id)) { activeCase = null; lastView='laws';law(byGroup.get(id)); }
+    else { activeCase = null; library(route==='laws',view); }
     window.scrollTo(0,0);
   }
   window.addEventListener('hashchange', render);

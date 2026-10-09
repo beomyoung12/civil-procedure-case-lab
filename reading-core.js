@@ -18,11 +18,15 @@
   }
   function primaryCases(cases) { return cases.filter(c => !c.id.startsWith('n')); }
   function groupCount(group, cases) { const ids = new Set(primaryCases(cases).map(c => c.id)); return group.members.filter(id => ids.has(id)).length; }
+  function unitCounts(items, unit = 'all') {
+    const rows = items.filter(item => unit === 'all' || item.unit === unit);
+    return { total: rows.length, important: rows.filter(item => item.important).length };
+  }
   function imagePath(source, page) {
     if (!/^s[0-9a-f]+$/.test(source) || !Number.isInteger(page) || page < 1) throw new Error('잘못된 원문 위치');
     return `source-pages/${source}/page-${String(page).padStart(3, '0')}.jpg`;
   }
-  const api = { SCHEMA, blank, validate, primaryCases, groupCount, imagePath };
+  const api = { SCHEMA, blank, validate, primaryCases, groupCount, unitCounts, imagePath };
   root.ReadingCore = api;
   if (typeof module !== 'undefined') module.exports = api;
 })(typeof window !== 'undefined' ? window : globalThis);
