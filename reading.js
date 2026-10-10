@@ -5,12 +5,14 @@
   const D = combined.data, R = combined.reading, C = window.ReadingCore, F = window.READING_FOCUS, FC = window.FocusCore, RC = window.ReadableCore;
   const T = combined.transcripts, TC = window.TranscriptCore;
   const Q = window.READING_QUICK?.items || {};
+  const A = window.READING_ANSWERS?.items || {};
   const key = 'civil-case-reading-v1', main = document.getElementById('main');
   const byId = new Map(D.cases.map(c => [c.id, c])), bySource = new Map(D.sources.map(s => [s.id, s]));
   const byGroup = new Map(R.groups.map(g => [g.id, g]));
   const esc = text => String(text ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   let records = C.blank(), persistError = false, filter = { unit: 'all', query: '', sort: 'unit', scope: 'all', supplements: false, important:false };
   let modelOpen = false, originalOpen = false, mobilePane = 'problem', toastTimer, activeCase = null, lastView = 'library';
+  let summaryOpen = false;
   let pageViews = {}, importPending = false, lawMode = 'quick';
   try { const old = localStorage.getItem(key); if (old) records = C.validate(JSON.parse(old), new Set(byId.keys()), new Set(byGroup.keys())); }
   catch { persistError = true; try { const damaged = localStorage.getItem(key); if(damaged) localStorage.setItem(key+'-backup-'+Date.now(),damaged); } catch {} }
@@ -56,10 +58,13 @@
   }
   function matches(text) { return !filter.query || text.toLowerCase().includes(filter.query.toLowerCase()); }
   function allowedStudy(done, draft = false) { return filter.scope === 'all' || filter.scope === 'new' && !done || filter.scope === 'studied' && done || filter.scope === 'draft' && draft; }
-  function quickMarkup(g) {
+  function quickQuestions(g) {
     const q=Q[g.id];
+    return q ? [q,...(q.followups || [])] : [];
+  }
+  function quickMarkup(g, q=Q[g.id]) {
     if(!q)return '<p class="notice">빠른 문답이 없는 묶음입니다. 자세한 법리를 확인하세요.</p>';
-    return `<div class="quick-question"><span class="qa-letter" aria-hidden="true">Q</span><h3>${esc(q.question)}</h3></div><details class="quick-answer"><summary>한 문장 답 보기</summary><div class="quick-answer-body"><p class="quick-answer-text"><span class="qa-letter" aria-hidden="true">A</span>${esc(q.answer)}</p><p class="quick-caution"><strong>구별할 점</strong> ${esc(q.caution)}</p><small>학습용 요약 · 원문 인용 아님</small></div></details>`;
+    return `<div class="quick-question"><span class="qa-letter" aria-hidden="true">Q</span><h3>${esc(q.question)}</h3></div><details class="quick-answer"><summary>짧은 답 보기</summary><div class="quick-answer-body"><p class="quick-answer-text"><span class="qa-letter" aria-hidden="true">A</span>${esc(q.answer)}</p><details class="quick-reason"><summary>왜? · 논거·예외</summary><p>${esc(q.reason)}</p><p class="quick-caution"><strong>예외·혼동 주의</strong> ${esc(q.caution)}</p><small>학습용 문답 · 원문 인용 아님</small></details></div></details>`;
   }
   function lawToolbar() {
     return `<div class="law-toolbar"><div class="law-modes" role="group" aria-label="법리 보기 방식"><button data-law-mode="quick" aria-pressed="${lawMode==='quick'}" class="${lawMode==='quick'?'active':''}">빠른 문답</button><button data-law-mode="detail" aria-pressed="${lawMode==='detail'}" class="${lawMode==='detail'?'active':''}">자세한 법리 목록</button></div>${lawMode==='quick'?'<div class="quick-tools"><button data-quick-all="show">답 모두 보기</button><button data-quick-all="hide">답 모두 가리기</button></div>':''}</div>`;
@@ -76,10 +81,11 @@
   function updateResults(laws) {
     const container = document.getElementById('results'); if (!container) return;
     if (laws) {
-      const groups = R.groups.filter(g => (!filter.important||g.important) && (filter.unit === 'all' || g.unit === filter.unit) && matches([g.title,g.focus,g.guide?.issue,g.guide?.rule,g.guide?.limits,Q[g.id]?.question,Q[g.id]?.answer,Q[g.id]?.caution,...(g.guide?.checks||[]),...(g.guide?.articles||[]).map(a=>`제${a}조`),...g.members.map(id => byId.get(id).title)].join(' ')) && allowedStudy(!!records.lawStudied[g.id], g.members.some(id => !!records.drafts[id]?.text)));
+      const groups = R.groups.filter(g => (!filter.important||g.important) && (filter.unit === 'all' || g.unit === filter.unit) && matches([g.title,g.focus,g.guide?.issue,g.guide?.rule,g.guide?.limits,...quickQuestions(g).flatMap(q=>[q.question,q.answer,q.reason,q.caution]),...(g.guide?.checks||[]),...(g.guide?.articles||[]).map(a=>`제${a}조`),...g.members.map(id => byId.get(id).title)].join(' ')) && allowedStudy(!!records.lawStudied[g.id], g.members.some(id => !!records.drafts[id]?.text)));
       if (filter.sort === 'repeat') groups.sort((a,b) => b.caseCount - a.caseCount);
       else groups.sort((a,b) => a.unit.localeCompare(b.unit));
-      container.innerHTML = `${lawToolbar()}<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${groups.length}개 묶음</small></div>${lawMode==='quick'?'<p class="quick-instruction">질문을 보고 답을 떠올린 뒤 펼쳐 보세요. 짧은 답과 구별할 점을 함께 확인하고, 헷갈리면 자세한 법리·원문으로 이동하세요.</p>':''}<div class="cards ${lawMode==='quick'?'quick-cards':''}">${groups.map(g => `<article class="card ${lawMode==='quick'?'quick-card':''}" data-law-card="${g.id}"><div class="tags"><span class="tag">${esc(unitName(g.unit))}</span><span class="tag">관련 사례 ${g.caseCount}개</span>${g.important?`<span class="tag important">중요 · 수업 ${g.classCount}개</span>`:''}${records.lawStudied[g.id] ? '<span class="tag">공부함</span>' : ''}</div>${lawMode==='quick'?quickMarkup(g):`<h3>${esc(g.title)}</h3><p>${esc(g.guide?.issue || g.focus)}</p>`}<div class="card-footer"><small>${esc(g.title)}</small><button data-law="${g.id}">자세한 법리·원문</button></div></article>`).join('')}</div>`;
+      const rows=lawMode==='quick' ? groups.flatMap(g=>quickQuestions(g).map((q,index)=>({g,q,index}))) : groups.map(g=>({g}));
+      container.innerHTML = `${lawToolbar()}<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${groups.length}개 묶음${lawMode==='quick'?` · ${rows.length}개 문답`:''}</small></div>${lawMode==='quick'?'<p class="quick-instruction">한 질문에 한 쟁점. 짧은 답에서 결론을 확인하고, 이유가 궁금하면 ‘왜? · 논거·예외’를 펼쳐 보세요.</p>':''}<div class="cards ${lawMode==='quick'?'quick-cards':''}">${rows.map(({g,q,index}) => `<article class="card ${lawMode==='quick'?'quick-card':''}" data-law-card="${g.id}"${q?` data-quick-id="${g.id}-${index+1}"`:''}><div class="tags"><span class="tag">${esc(unitName(g.unit))}</span><span class="tag">관련 사례 ${g.caseCount}개</span>${g.important?`<span class="tag important">중요 · 수업 ${g.classCount}개</span>`:''}${records.lawStudied[g.id] ? '<span class="tag">공부함</span>' : ''}</div>${lawMode==='quick'?quickMarkup(g,q):`<h3>${esc(g.title)}</h3><p>${esc(g.guide?.issue || g.focus)}</p>`}<div class="card-footer"><small>${esc(g.title)}</small><button data-law="${g.id}">자세한 법리·원문</button></div></article>`).join('')}</div>`;
       if (!groups.length) container.innerHTML += '<p class="empty">조건에 맞는 법리 묶음이 없습니다.</p>';
     } else {
       const cases = D.cases.filter(c => visible(c) && (filter.unit === 'all' || c.unit === filter.unit) && matches([c.title,c.facts,c.prompt,c.year,bySource.get(c.sourceId).name].join(' ')) && allowedStudy(!!records.studied[c.id],!!records.drafts[c.id]?.text));
@@ -188,14 +194,27 @@
     const backLabel={laws:'반복 법리 목록',classes:'수업 문제 목록',library:'단원별 문제 목록'}[lastView];
     const problemButton=originalOpen?'문제 요지로 돌아가기':'원문 문제 보기';
     const problemContent=originalOpen ? sourceViewer(c,'problem') : `<div class="panel-body"><p class="small">학습용 문제 요지입니다. 교수님이 쓴 정확한 문제 문장은 ‘원문 문제 보기’에서 확인할 수 있습니다.</p><p>${esc(c.facts).replace(/\n/g,'<br>')}</p><p class="question">${esc(c.prompt).replace(/\n/g,'<br>')}</p></div>`;
-    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="mobile-switch"><button id="mobile-problem" class="${mobilePane === 'problem' ? 'active' : ''}">문제</button><button id="mobile-answer" class="${mobilePane === 'answer' ? 'active' : ''}">답안 작성·모범답안</button></div><div class="reading-grid"><section class="panel problem ${mobilePane !== 'problem' ? 'mobile-hidden' : ''}" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section><section class="panel ${mobilePane !== 'answer' ? 'mobile-hidden' : ''}" id="answer-panel"><div class="panel-head"><h2 id="answer-title">${modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : '내 답안'}</h2><div class="tools"><button id="toggle-answer" class="primary">${modelOpen ? '내 답안으로 돌아가기' : R.cases[c.id].hasModelAnswer ? '모범답안 보기' : '원문 자료 보기'}</button></div></div><div id="answer-content">${modelOpen ? modelMarkup(c) : editor(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
+    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="mobile-switch"><button id="mobile-problem" class="${mobilePane === 'problem' ? 'active' : ''}">문제</button><button id="mobile-answer" class="${mobilePane === 'answer' ? 'active' : ''}">답안 작성·요약·원문</button></div><div class="reading-grid"><section class="panel problem ${mobilePane !== 'problem' ? 'mobile-hidden' : ''}" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section><section class="panel ${mobilePane !== 'answer' ? 'mobile-hidden' : ''}" id="answer-panel"><div class="panel-head answer-head"><h2 id="answer-title">${answerTitle(c)}</h2><div class="answer-modes" role="group" aria-label="답안 보기 방식">${answerButtons(c)}</div></div><div id="answer-content">${answerContent(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
     bindReading(c);
   }
   function neighborButtons(c) {
     const same = D.cases.filter(x => x.unit === c.unit && !R.cases[x.id].supplement && CC.inView(x,lastView)), index = same.findIndex(x => x.id === c.id);
     return `${index > 0 ? `<button data-case="${same[index-1].id}">← 같은 단원 이전 문제</button>` : ''}${index >= 0 && index < same.length-1 ? `<button data-case="${same[index+1].id}">같은 단원 다음 문제 →</button>` : ''}`;
   }
-  function editor(c) { const draft = records.drafts[c.id] || {}; return `<textarea class="draft" id="answer-input" aria-label="내 답안 입력" placeholder="여기에 답안을 써보세요.\n\n문제의 소재 → 법리 → 사안의 적용 → 결론\n\n모범답안을 열어도 작성 내용은 사라지지 않습니다.">${esc(draft.text || '')}</textarea><div class="save-line"><span id="save-status">${persistError ? '저장 실패 · 내보내기 필요' : '자동 저장 준비됨'}${draft.viewed ? ' · 원문 열람한 답안' : ''}</span><span id="char-count">${(draft.text||'').length.toLocaleString()}자</span></div>`; }
+  function answerMode() { return modelOpen ? 'original' : summaryOpen ? 'summary' : 'editor'; }
+  function answerTitle(c) { return modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : summaryOpen ? '요약 답안' : '내 답안'; }
+  function answerButtons(c) {
+    const names={editor:'내 답안',summary:'요약 답안 보기',original:R.cases[c.id].hasModelAnswer?'모범답안 원문':'원문 자료'};
+    return Object.entries(names).map(([mode,label])=>`<button data-answer-mode="${mode}" ${mode==='original'?'id="toggle-answer"':mode==='summary'?'id="toggle-summary"':''} aria-pressed="${answerMode()===mode}" class="${answerMode()===mode?'active':''}">${label}</button>`).join('');
+  }
+  function answerContent(c) { return modelOpen ? modelMarkup(c) : summaryOpen ? summaryMarkup(c) : editor(c); }
+  function summaryMarkup(c) {
+    const row=A[c.id];
+    if(!row)return '<div class="panel-body"><p class="notice">요약 답안 데이터를 불러오지 못했습니다. 새 파일 반영 후 새로고침하거나 모범답안 원문을 확인하세요.</p></div>';
+    const provenance=row.basis==='primary'?'자료와 법리 정리를 바탕으로 작성한 학습용 요약 · 원문 인용 아님':row.basis==='comparison'?'관련 답안·법리 정리를 바탕으로 작성한 학습용 구성 답 · 이 문제의 원문 모범답안 아님':'학습용 구성 답안 · 이 문제에는 원문 모범답안이 수록되어 있지 않음';
+    return `<article class="case-answer-summary panel-body" aria-label="이 문제의 요약 답안"><p class="summary-provenance">${provenance}</p><div class="summary-paragraphs">${row.paragraphs.map(p=>`<p>${esc(p)}</p>`).join('')}</div>${row.note?`<p class="summary-note">${esc(row.note)}</p>`:''}${c.caution?`<details class="summary-caution"><summary>결론을 읽을 때 주의할 점</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref=>`<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)} ↗</a>`).join(' · ')}</details>`:''}<div class="summary-footer"><span>요약 질문의 결론·이유 중심 · 세부 요건·학설은 원문에서 대조</span><button data-answer-mode="original">${R.cases[c.id].hasModelAnswer?'모범답안 원문 보기':'원문 자료 확인'}</button><button data-answer-mode="editor" class="quiet">내 답안으로 돌아가기</button></div></article>`;
+  }
+  function editor(c) { const draft = records.drafts[c.id] || {}; return `<textarea class="draft" id="answer-input" aria-label="내 답안 입력" placeholder="여기에 답안을 써보세요.\n\n문제의 소재 → 법리 → 사안의 적용 → 결론\n\n요약 답안·모범답안을 열어도 작성 내용은 사라지지 않습니다.">${esc(draft.text || '')}</textarea><div class="save-line"><span id="save-status">${persistError ? '저장 실패 · 내보내기 필요' : '자동 저장 준비됨'}${draft.viewed ? ' · 요약·원문 열람 기록 있음' : ''}</span><span id="char-count">${(draft.text||'').length.toLocaleString()}자</span></div>`; }
   function modelMarkup(c) {
     const available = R.cases[c.id].hasModelAnswer;
     return `${!available ? '<div class="notice">이 문제에는 교수님 모범답안이 수록되어 있지 않습니다. 아래에는 문제 원문만 보여줍니다. 이전 사이트의 생성·요약 답안을 교수님 답안으로 대신 표시하지 않습니다.</div>' : ''}${sourceViewer(c,'answer',true)}`;
@@ -207,16 +226,6 @@
   function bindReading(c) {
     document.getElementById('answer-input')?.addEventListener('input', saveDraft);
     document.getElementById('case-studied').addEventListener('change', e => { if (e.target.checked) records.studied[c.id] = new Date().toISOString(); else delete records.studied[c.id]; persist(); });
-    document.getElementById('toggle-answer').addEventListener('click', () => {
-      saveDraft(); modelOpen = !modelOpen;
-      if (modelOpen) { records.drafts[c.id] = { ...(records.drafts[c.id] || {text:''}), viewed: true }; persist(); }
-      // Only replace the right pane, never the question or a composing input mid-typing.
-      document.getElementById('answer-content').innerHTML = modelOpen ? modelMarkup(c) : editor(c);
-      document.getElementById('answer-title').textContent = modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : '내 답안';
-      document.getElementById('toggle-answer').textContent = modelOpen ? '내 답안으로 돌아가기' : R.cases[c.id].hasModelAnswer ? '모범답안 보기' : '원문 자료 보기';
-      document.getElementById('answer-input')?.addEventListener('input', saveDraft);
-      bindImages();
-    });
     document.getElementById('problem-source').addEventListener('click', () => {
       saveDraft();
       originalOpen=!originalOpen;
@@ -251,7 +260,7 @@
     const guide = g.guide;
     if (!guide) return '<p class="notice">법리 보충 정리를 불러오지 못했습니다. 원문 자료를 확인하세요.</p>';
     return `<div class="rule-guide">
-      <section class="law-quick-intro" aria-label="이 법리의 빠른 문답">${quickMarkup(g)}</section>
+      <section class="law-quick-intro" aria-label="이 법리의 빠른 문답">${quickQuestions(g).map(q=>`<div class="quick-item">${quickMarkup(g,q)}</div>`).join('')}</section>
       <section><h3>어떤 때 쟁점이 되는가</h3><p>${esc(guide.issue)}</p></section>
       <section class="rule-main"><h3>판단의 기준</h3><p>${esc(guide.rule)}</p></section>
       <section><h3>확인할 요건·판단 순서</h3><ol>${guide.checks.map(t=>`<li>${esc(t)}</li>`).join('')}</ol></section>
@@ -283,13 +292,25 @@
     main.querySelectorAll('img.source-image').forEach(img => { img.onerror = () => { img.alt = '원문 이미지가 없습니다. 위의 전체 PDF 링크로 확인하세요.'; toast('원문 이미지가 없어 전체 PDF로 확인해야 합니다.'); }; });
   }
   main.addEventListener('toggle', e => {
-    if (e.target.matches?.('.quick-answer')) e.target.querySelector('summary').textContent=e.target.open?'답 가리기':'한 문장 답 보기';
+    if (e.target.matches?.('.quick-answer')) e.target.querySelector('summary').textContent=e.target.open?'답 가리기':'짧은 답 보기';
   },true);
   main.addEventListener('click', e => {
     const el = e.target.closest('button,[data-zoom]'); if (!el) return;
+    if(el.dataset.answerMode&&activeCase){
+      const mode=el.dataset.answerMode,c=byId.get(activeCase);
+      if(!['editor','summary','original'].includes(mode))return;
+      saveDraft(); modelOpen=mode==='original';summaryOpen=mode==='summary';
+      if(mode!=='editor'){records.drafts[c.id]={...(records.drafts[c.id]||{text:''}),viewed:true};persist();}
+      // A deliberate mode switch replaces only the right pane; typed drafts stay saved.
+      document.getElementById('answer-content').innerHTML=answerContent(c);
+      document.getElementById('answer-title').textContent=answerTitle(c);
+      document.querySelector('.answer-modes').innerHTML=answerButtons(c);
+      document.getElementById('answer-input')?.addEventListener('input',saveDraft);
+      bindImages();return;
+    }
     if (el.dataset.lawMode) { lawMode=el.dataset.lawMode==='detail'?'detail':'quick'; updateResults(true); }
     if (el.dataset.quickAll) main.querySelectorAll('.quick-answer').forEach(answer=>{answer.open=el.dataset.quickAll==='show';});
-    if (el.dataset.case) { modelOpen = false; originalOpen = false; mobilePane = 'problem'; pageViews = {}; go('#case/'+el.dataset.case); }
+    if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; mobilePane = 'problem'; pageViews = {}; go('#case/'+el.dataset.case); }
     if (el.dataset.law) { pageViews = {}; go('#law/'+el.dataset.law); }
     if (el.dataset.back) go('#'+el.dataset.back);
     if (el.dataset.unit) { filter.unit = el.dataset.unit; records.unit = filter.unit; persist(); library(location.hash === '#laws'); }
@@ -326,7 +347,7 @@
   function render() {
     const [route, rawId] = location.hash.slice(1).split('/'),id=CC.routeId(rawId);
     // Direct case links and browser history must not reuse another case's PDF/page choice.
-    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;mobilePane='problem';}
+    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;mobilePane='problem';}
     const view=route==='law'?'laws':route==='case'?lastView:['laws','classes'].includes(route)?route:'library';
     document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
     if (route === 'case' && byId.has(id)) reading(byId.get(id));
