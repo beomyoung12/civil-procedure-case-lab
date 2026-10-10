@@ -6,6 +6,8 @@
   const T = combined.transcripts, TC = window.TranscriptCore;
   const Q = window.READING_QUICK?.items || {};
   const A = window.READING_ANSWERS?.items || {};
+  const QC = window.LawQuizCore, OX = window.READING_OX;
+  const quizBank = QC.bank(Q,OX,R.groups), quizKey = 'civil-law-ox-v1', lawModeKey = 'civil-law-view-v1';
   const key = 'civil-case-reading-v1', main = document.getElementById('main');
   const byId = new Map(D.cases.map(c => [c.id, c])), bySource = new Map(D.sources.map(s => [s.id, s]));
   const byGroup = new Map(R.groups.map(g => [g.id, g]));
@@ -14,8 +16,15 @@
   let modelOpen = false, originalOpen = false, mobilePane = 'problem', toastTimer, activeCase = null, lastView = 'library';
   let summaryOpen = false;
   let pageViews = {}, importPending = false, lawMode = 'quick';
+  let quizSession = null, quizPinned = false, quizRangeOpen = false, quizSelectedIds = [];
   try { const old = localStorage.getItem(key); if (old) records = C.validate(JSON.parse(old), new Set(byId.keys()), new Set(byGroup.keys())); }
   catch { persistError = true; try { const damaged = localStorage.getItem(key); if(damaged) localStorage.setItem(key+'-backup-'+Date.now(),damaged); } catch {} }
+  try {
+    const stored = localStorage.getItem(quizKey);
+    if (stored && JSON.parse(stored)) quizSession = QC.validate(JSON.parse(stored),quizBank,OX.version);
+    const mode = localStorage.getItem(lawModeKey);
+    if (['quick','detail','ox'].includes(mode)) lawMode = mode;
+  } catch { persistError = true; try { const damaged=localStorage.getItem(quizKey); if(damaged)localStorage.setItem(quizKey+'-backup-'+Date.now(),damaged); } catch {} }
   filter.unit = records.unit;
   function toast(message) { const box = document.getElementById('toast'); box.textContent = message; box.style.display = 'block'; clearTimeout(toastTimer); toastTimer = setTimeout(() => box.style.display = 'none', 3500); }
   function persist() {
@@ -67,7 +76,45 @@
     return `<div class="quick-question"><span class="qa-letter" aria-hidden="true">Q</span><h3>${esc(q.question)}</h3></div><details class="quick-answer"><summary>짧은 답 보기</summary><div class="quick-answer-body"><p class="quick-answer-text"><span class="qa-letter" aria-hidden="true">A</span>${esc(q.answer)}</p><details class="quick-reason"><summary>왜? · 논거·예외</summary><p>${esc(q.reason)}</p><p class="quick-caution"><strong>예외·혼동 주의</strong> ${esc(q.caution)}</p><small>학습용 문답 · 원문 인용 아님</small></details></div></details>`;
   }
   function lawToolbar() {
-    return `<div class="law-toolbar"><div class="law-modes" role="group" aria-label="법리 보기 방식"><button data-law-mode="quick" aria-pressed="${lawMode==='quick'}" class="${lawMode==='quick'?'active':''}">빠른 문답</button><button data-law-mode="detail" aria-pressed="${lawMode==='detail'}" class="${lawMode==='detail'?'active':''}">자세한 법리 목록</button></div>${lawMode==='quick'?'<div class="quick-tools"><button data-quick-all="show">답 모두 보기</button><button data-quick-all="hide">답 모두 가리기</button></div>':''}</div>`;
+    return `<div class="law-toolbar"><div class="law-modes" role="group" aria-label="법리 보기 방식"><button data-law-mode="ox" aria-pressed="${lawMode==='ox'}" class="${lawMode==='ox'?'active':''}">OX 풀기</button><button data-law-mode="quick" aria-pressed="${lawMode==='quick'}" class="${lawMode==='quick'?'active':''}">빠른 문답</button><button data-law-mode="detail" aria-pressed="${lawMode==='detail'}" class="${lawMode==='detail'?'active':''}">자세한 법리</button></div>${lawMode==='quick'?'<div class="quick-tools"><button data-quick-all="show">답 모두 보기</button><button data-quick-all="hide">답 모두 가리기</button></div>':''}</div>`;
+  }
+  function persistQuiz() {
+    try { localStorage.setItem(quizKey,JSON.stringify(quizSession)); return true; }
+    catch { toast('OX 기록 저장 실패 · 이 화면을 닫기 전에 기록을 내보내세요.'); return false; }
+  }
+  function quizSelection(groups) {
+    const selected=new Set(groups.map(g=>g.id));
+    return [...quizBank.values()].filter(q=>selected.has(q.groupId)).map(q=>q.id);
+  }
+  function renderQuiz(groups) {
+    const ids=quizSelection(groups), showSession=quizSession && (quizPinned || QC.sameScope(quizSession,ids));
+    quizSelectedIds=ids;
+    const score=quizSession ? QC.score(quizSession,quizBank) : null;
+    main.classList.toggle('quiz-focused',!!showSession && !quizRangeOpen);
+    let body;
+    if (!showSession) {
+      body=`<section class="ox-stage ox-intro" id="ox-stage"><p class="eyebrow">TAP TO CHECK</p><h2>한 문장씩 OX로 확인하기</h2><p>선택 범위 <strong>${ids.length}문제</strong> · 순서를 섞어 출제합니다.<br>O/X를 누르면 바로 채점하고, 결론·논거·예외를 보여줍니다.</p><div class="tools"><button class="primary" data-quiz-start ${ids.length?'':'disabled'}>선택 범위 OX 시작</button>${quizSession?`<button data-quiz-resume>이전 시험 ${score.complete?'결과 보기':'이어풀기'} · ${score.answered}/${score.total}</button>`:''}</div><p class="small">왼쪽에서 단원을 고르거나 검색하면 시험 범위가 바뀝니다. 기존 문답과 원문 답안은 그대로 보존됩니다.</p></section>`;
+    } else if (score.complete) {
+      const wrong=score.wrong.map(id=>quizBank.get(id));
+      body=`<section class="ox-stage" id="ox-stage"><p class="eyebrow">OX RESULT</p><h2 id="ox-heading" tabindex="-1">${score.total}문제 완료</h2><p class="ox-score"><strong>${score.correct} / ${score.total}</strong> 정답 · 오답 ${wrong.length}개</p><p class="small">${esc(quizSession.title)} · 한 번 맞혔다고 암기 완료로 처리하지 않습니다.</p><div class="tools"><button class="primary" data-quiz-retry ${wrong.length?'':'disabled'}>틀린 ${wrong.length}문제만 다시 풀기</button><button data-quiz-start ${ids.length?'':'disabled'}>선택 범위 새로 풀기</button><button data-quiz-range>단원·범위 ${quizRangeOpen?'접기':'바꾸기'}</button></div>${wrong.length?`<h3 class="ox-wrong-title">틀린 문장 다시 보기</h3><ol class="ox-wrong-list">${wrong.map(q=>`<li><p>${esc(q.statement)}</p><strong>정답 ${q.correct?'O':'X'} · 내 답 ${quizSession.answers[q.id]?'O':'X'}</strong><p>${esc(q.answer)}</p><button data-law="${q.groupId}">논거·예외·원문</button></li>`).join('')}</ol>`:'<p class="ox-all-correct">모두 맞혔습니다. 시간을 두고 다시 풀어보세요.</p>'}</section>`;
+    } else {
+      const q=quizBank.get(quizSession.ids[quizSession.cursor]), answered=QC.owns(quizSession.answers,q.id);
+      const correct=answered && quizSession.answers[q.id]===q.correct;
+      body=`<section class="ox-stage" id="ox-stage"><div class="ox-topline"><span>${esc(quizSession.title)}</span><button class="quiet" data-quiz-range>단원·범위 ${quizRangeOpen?'접기':'바꾸기'}</button></div><div class="ox-progress-label"><strong>${quizSession.cursor+1} / ${score.total}</strong><span>정답 ${score.correct} · 오답 ${score.wrong.length}</span></div><progress aria-label="OX 응답 진행" value="${score.answered}" max="${score.total}"></progress><p class="ox-unit">${esc(unitName(q.unit))}</p><h2 class="ox-statement" id="ox-heading" tabindex="-1">${esc(q.statement)}</h2><div class="ox-choices" role="group" aria-label="OX 답 선택"><button data-quiz-answer="true" aria-label="O 맞다" ${answered?'disabled':''} class="ox-choice ox-o ${answered&&quizSession.answers[q.id]?'chosen':''}"><strong>O</strong><span>맞다</span></button><button data-quiz-answer="false" aria-label="X 틀리다" ${answered?'disabled':''} class="ox-choice ox-x ${answered&&!quizSession.answers[q.id]?'chosen':''}"><strong>X</strong><span>틀리다</span></button></div>${answered?`<div class="ox-feedback ${correct?'is-correct':'is-wrong'}" role="status"><h3>${correct?'맞았습니다':'틀렸습니다'} · 정답 ${q.correct?'O':'X'}</h3><p class="ox-correct-answer">${esc(q.answer)}</p><p>${esc(q.reason)}</p><p class="ox-caution"><strong>예외·혼동 주의</strong> ${esc(q.caution)}</p><button class="quiet" data-law="${q.groupId}">자세한 법리·원문</button></div><button class="primary ox-next" data-quiz-next>${quizSession.cursor+1===score.total?'결과 보기':'다음 문제'}</button>`:'<p class="ox-hint">문장이 옳으면 O, 틀리면 X를 눌러주세요.</p>'}<p class="ox-save small">이 브라우저에 자동 저장 · 학습용 재구성 문장, 원문 인용 아님</p></section>`;
+    }
+    document.getElementById('results').innerHTML=lawToolbar()+body;
+  }
+  function startQuiz(ids,title) {
+    if(!ids.length)return;
+    if(quizSession && !QC.score(quizSession,quizBank).complete && Object.keys(quizSession.answers).length && !confirm('현재 OX 시험을 새 시험으로 바꿀까요? 작성 중인 사례 답안은 유지됩니다.'))return;
+    quizSession=QC.create(ids,title,OX.version);quizPinned=true;quizRangeOpen=false;
+    persistQuiz();updateResults(true);focusQuiz();
+  }
+  function focusQuiz(answered=false) {
+    const target=document.querySelector(answered?'[data-quiz-next]':'#ox-heading');
+    target?.focus({preventScroll:true});
+    if(answered)target?.scrollIntoView({block:'nearest',behavior:'instant'});
+    else document.getElementById('ox-stage')?.scrollIntoView({block:'start',behavior:'instant'});
   }
   function library(laws, view=lastView==='classes'?'classes':'library') {
     lastView=laws?'laws':view;
@@ -80,10 +127,12 @@
   }
   function updateResults(laws) {
     const container = document.getElementById('results'); if (!container) return;
+    main.classList.remove('quiz-focused');
     if (laws) {
       const groups = R.groups.filter(g => (!filter.important||g.important) && (filter.unit === 'all' || g.unit === filter.unit) && matches([g.title,g.focus,g.guide?.issue,g.guide?.rule,g.guide?.limits,...quickQuestions(g).flatMap(q=>[q.question,q.answer,q.reason,q.caution]),...(g.guide?.checks||[]),...(g.guide?.articles||[]).map(a=>`제${a}조`),...g.members.map(id => byId.get(id).title)].join(' ')) && allowedStudy(!!records.lawStudied[g.id], g.members.some(id => !!records.drafts[id]?.text)));
       if (filter.sort === 'repeat') groups.sort((a,b) => b.caseCount - a.caseCount);
       else groups.sort((a,b) => a.unit.localeCompare(b.unit));
+      if(lawMode==='ox'){renderQuiz(groups);return;}
       const rows=lawMode==='quick' ? groups.flatMap(g=>quickQuestions(g).map((q,index)=>({g,q,index}))) : groups.map(g=>({g}));
       container.innerHTML = `${lawToolbar()}<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${groups.length}개 묶음${lawMode==='quick'?` · ${rows.length}개 문답`:''}</small></div>${lawMode==='quick'?'<p class="quick-instruction">한 질문에 한 쟁점. 짧은 답에서 결론을 확인하고, 이유가 궁금하면 ‘왜? · 논거·예외’를 펼쳐 보세요.</p>':''}<div class="cards ${lawMode==='quick'?'quick-cards':''}">${rows.map(({g,q,index}) => `<article class="card ${lawMode==='quick'?'quick-card':''}" data-law-card="${g.id}"${q?` data-quick-id="${g.id}-${index+1}"`:''}><div class="tags"><span class="tag">${esc(unitName(g.unit))}</span><span class="tag">관련 사례 ${g.caseCount}개</span>${g.important?`<span class="tag important">중요 · 수업 ${g.classCount}개</span>`:''}${records.lawStudied[g.id] ? '<span class="tag">공부함</span>' : ''}</div>${lawMode==='quick'?quickMarkup(g,q):`<h3>${esc(g.title)}</h3><p>${esc(g.guide?.issue || g.focus)}</p>`}<div class="card-footer"><small>${esc(g.title)}</small><button data-law="${g.id}">자세한 법리·원문</button></div></article>`).join('')}</div>`;
       if (!groups.length) container.innerHTML += '<p class="empty">조건에 맞는 법리 묶음이 없습니다.</p>';
@@ -91,15 +140,15 @@
       const cases = D.cases.filter(c => visible(c) && (filter.unit === 'all' || c.unit === filter.unit) && matches([c.title,c.facts,c.prompt,c.year,bySource.get(c.sourceId).name].join(' ')) && allowedStudy(!!records.studied[c.id],!!records.drafts[c.id]?.text));
       if (filter.sort === 'repeat') cases.sort(lastView==='classes'?(a,b)=>a.classKey.localeCompare(b.classKey,'ko',{numeric:true}):(a,b)=>Number((b.year||'').match(/20\d{2}/)?.[0]||0)-Number((a.year||'').match(/20\d{2}/)?.[0]||0));
       else cases.sort((a,b)=>a.unit.localeCompare(b.unit)||Number(!!b.important)-Number(!!a.important));
-      container.innerHTML = `<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${cases.length}개 사례분류 <span class="result-important">· 중요 ${cases.filter(c=>c.important).length}개</span></small></div><div class="case-list">${cases.map(c => `<article class="case-row"><span class="case-number">${CC.isClass(c)?'수업':esc(c.id.toUpperCase())}</span><div><h3>${esc(c.title)}</h3><div class="tags"><span class="tag">${esc(unitName(c.unit))}</span>${tags(c)}</div></div><span class="small row-status">${records.studied[c.id] ? '공부함' : records.drafts[c.id]?.text ? '답안 작성 중' : '아직 쓰지 않음'}</span><button data-case="${c.id}">${records.drafts[c.id]?.text ? '이어서 쓰기' : '문제 풀기'}</button></article>`).join('')}</div>`;
+      container.innerHTML = `<div class="section-title"><h2>${esc(unitName(filter.unit))}</h2><small>${cases.length}개 사례분류 <span class="result-important">· 중요 ${cases.filter(c=>c.important).length}개</span></small></div><div class="case-list">${cases.map((c,index) => `<article class="case-row" data-list-number="${index+1}"><span class="case-number">${CC.isClass(c)?'수업':esc(c.id.toUpperCase())}</span><div><h3><span class="case-list-index" aria-label="목록 ${index+1}번">${index+1}.</span> ${esc(c.title)}</h3><div class="tags"><span class="tag">${esc(unitName(c.unit))}</span>${tags(c)}</div></div><span class="small row-status">${records.studied[c.id] ? '공부함' : records.drafts[c.id]?.text ? '답안 작성 중' : '아직 쓰지 않음'}</span><button data-case="${c.id}">${records.drafts[c.id]?.text ? '이어서 쓰기' : '문제 풀기'}</button></article>`).join('')}</div>`;
       if (!cases.length) container.innerHTML += '<p class="empty">조건에 맞는 문제가 없습니다.</p>';
     }
   }
   function bindLibrary(laws) {
-    document.getElementById('search').addEventListener('input', e => { filter.query = e.target.value; updateResults(laws); });
-    for (const type of ['sort','scope']) document.getElementById(type).addEventListener('change', e => { filter[type] = e.target.value; updateResults(laws); });
+    document.getElementById('search').addEventListener('input', e => { filter.query = e.target.value; quizPinned=false; updateResults(laws); });
+    for (const type of ['sort','scope']) document.getElementById(type).addEventListener('change', e => { filter[type] = e.target.value; quizPinned=false; updateResults(laws); });
     document.getElementById('supplements')?.addEventListener('change', e => { filter.supplements = e.target.checked; library(false); });
-    document.getElementById('important-only')?.addEventListener('change',e=>{filter.important=e.target.checked;library(laws);});
+    document.getElementById('important-only')?.addEventListener('change',e=>{filter.important=e.target.checked;quizPinned=false;library(laws);});
   }
   function refsFor(c) {
     let refs = [R.cases[c.id].primary,...R.cases[c.id].related].filter(r => bySource.has(r.sourceId));
@@ -308,12 +357,20 @@
       document.getElementById('answer-input')?.addEventListener('input',saveDraft);
       bindImages();return;
     }
-    if (el.dataset.lawMode) { lawMode=el.dataset.lawMode==='detail'?'detail':'quick'; updateResults(true); }
+    if(el.hasAttribute('data-quiz-start')) {
+      startQuiz(quizSelectedIds,unitName(filter.unit)+(filter.query?' · 검색: '+filter.query:'')+(filter.important?' · 중요 법리':''));return;
+    }
+    if(el.hasAttribute('data-quiz-answer')){quizSession=QC.answer(quizSession,el.dataset.quizAnswer==='true',quizBank);persistQuiz();updateResults(true);focusQuiz(true);return;}
+    if(el.hasAttribute('data-quiz-next')){quizSession=QC.next(quizSession);persistQuiz();updateResults(true);focusQuiz();return;}
+    if(el.hasAttribute('data-quiz-retry')){startQuiz(QC.score(quizSession,quizBank).wrong,quizSession.title+' · 오답 복습');return;}
+    if(el.hasAttribute('data-quiz-resume')){quizPinned=true;quizRangeOpen=false;updateResults(true);focusQuiz();return;}
+    if(el.hasAttribute('data-quiz-range')){quizRangeOpen=!quizRangeOpen;updateResults(true);if(quizRangeOpen)document.querySelector('.sidebar')?.scrollIntoView({block:'start'});return;}
+    if (el.dataset.lawMode) { lawMode=['quick','detail','ox'].includes(el.dataset.lawMode)?el.dataset.lawMode:'quick'; try{localStorage.setItem(lawModeKey,lawMode);}catch{} updateResults(true); }
     if (el.dataset.quickAll) main.querySelectorAll('.quick-answer').forEach(answer=>{answer.open=el.dataset.quickAll==='show';});
     if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; mobilePane = 'problem'; pageViews = {}; go('#case/'+el.dataset.case); }
     if (el.dataset.law) { pageViews = {}; go('#law/'+el.dataset.law); }
     if (el.dataset.back) go('#'+el.dataset.back);
-    if (el.dataset.unit) { filter.unit = el.dataset.unit; records.unit = filter.unit; persist(); library(location.hash === '#laws'); }
+    if (el.dataset.unit) { filter.unit = el.dataset.unit; records.unit = filter.unit; quizPinned=false; persist(); library(location.hash === '#laws'); }
     const slot = el.dataset.pagePrev || el.dataset.pageNext;
     if (slot && !el.disabled) { const state = currentViewer(slot), index = state.ref.pages.indexOf(pageViews[slot].page); pageViews[slot].page = state.ref.pages[index + (el.dataset.pageNext ? 1 : -1)]; refreshViewer(slot); }
     if(el.dataset.format) { const slot = el.dataset.format; pageViews[slot].format = pageViews[slot].format === 'image' ? 'text' : 'image'; refreshViewer(slot); }
@@ -345,6 +402,7 @@
     }
   });
   function render() {
+    main.classList.remove('quiz-focused');
     const [route, rawId] = location.hash.slice(1).split('/'),id=CC.routeId(rawId);
     // Direct case links and browser history must not reuse another case's PDF/page choice.
     if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;mobilePane='problem';}
@@ -359,16 +417,16 @@
   window.addEventListener('pagehide', saveDraft);
   document.addEventListener('visibilitychange', () => { if(document.hidden) saveDraft(); });
   document.querySelectorAll('[data-view]').forEach(b => b.addEventListener('click', () => go('#'+b.dataset.view)));
-  document.getElementById('records-open').addEventListener('click', () => { saveDraft(); document.getElementById('record-summary').textContent = `작성한 답안 ${Object.values(records.drafts).filter(d=>d.text).length}개 · 공부한 문제 ${Object.keys(records.studied).length}개 · 공부한 묶음 ${Object.keys(records.lawStudied).length}개`; document.getElementById('records').showModal(); });
+  document.getElementById('records-open').addEventListener('click', () => { saveDraft(); document.getElementById('record-summary').textContent = `작성한 답안 ${Object.values(records.drafts).filter(d=>d.text).length}개 · 공부한 문제 ${Object.keys(records.studied).length}개 · 공부한 묶음 ${Object.keys(records.lawStudied).length}개${quizSession?` · OX ${QC.score(quizSession,quizBank).answered}/${quizSession.ids.length}문제 응답`:''}`; document.getElementById('records').showModal(); });
   document.getElementById('zoom-close').addEventListener('click', () => document.getElementById('zoom').close());
-  document.getElementById('export').addEventListener('click', () => { saveDraft(); const url = URL.createObjectURL(new Blob([JSON.stringify(records,null,2)],{type:'application/json'})); const a=document.createElement('a'); a.href=url; a.download=`민소-사례답안-${new Date().toISOString().slice(0,10)}.json`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); });
+  document.getElementById('export').addEventListener('click', () => { saveDraft(); const url = URL.createObjectURL(new Blob([JSON.stringify({...records,oxQuiz:quizSession},null,2)],{type:'application/json'})); const a=document.createElement('a'); a.href=url; a.download=`민소-사례답안-${new Date().toISOString().slice(0,10)}.json`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); });
   document.getElementById('import').addEventListener('change', async e => {
     const file = e.target.files[0]; if(!file || importPending) return; importPending=true;
-    try { if(file.size > 10*1024*1024) throw new Error('기록 파일이 너무 큽니다.'); const incoming = C.validate(JSON.parse(await file.text()),new Set(byId.keys()),new Set(byGroup.keys())); if(!confirm('현재 새 화면의 답안과 공부기록을 가져온 파일로 교체할까요? 기존 기록을 먼저 내보내는 것을 권장합니다.')) return; records=incoming; filter.unit=records.unit; persist(); document.getElementById('records').close(); render(); toast('답안과 공부기록을 가져왔습니다.'); }
+    try { if(file.size > 10*1024*1024) throw new Error('기록 파일이 너무 큽니다.'); const raw=JSON.parse(await file.text()),incoming = C.validate(raw,new Set(byId.keys()),new Set(byGroup.keys())); const incomingQuiz=raw.oxQuiz?QC.validate(raw.oxQuiz,quizBank,OX.version):null; if(!confirm('현재 새 화면의 답안과 공부기록을 가져온 파일로 교체할까요? 기존 기록을 먼저 내보내는 것을 권장합니다.')) return; records=incoming; if('oxQuiz' in raw){quizSession=incomingQuiz;quizPinned=!!quizSession;persistQuiz();} filter.unit=records.unit; persist(); document.getElementById('records').close(); render(); toast('답안과 공부기록을 가져왔습니다.'); }
     catch(error) { toast(error.message); }
     finally { importPending=false; e.target.value=''; }
   });
-  document.getElementById('reset').addEventListener('click', () => { if(!confirm('새 화면에서 작성한 모든 답안과 공부기록을 지울까요? 이전 연습실의 기록은 지우지 않습니다.')) return; records=C.blank(); persist(); filter.unit='all'; document.getElementById('records').close(); render(); toast('새 화면의 기록을 초기화했습니다.'); });
+  document.getElementById('reset').addEventListener('click', () => { if(!confirm('새 화면에서 작성한 모든 답안·공부기록·OX 기록을 지울까요? 이전 연습실의 기록은 지우지 않습니다.')) return; records=C.blank(); quizSession=null;quizPinned=false; persistQuiz();persist(); filter.unit='all'; document.getElementById('records').close(); render(); toast('새 화면의 기록을 초기화했습니다.'); });
   render();
   if(persistError) toast('저장 기록을 읽지 못했습니다. 가능한 경우 기존 저장값을 백업해 두었습니다.');
 })();
