@@ -6,6 +6,7 @@
   const T = combined.transcripts, TC = window.TranscriptCore;
   const Q = window.READING_QUICK?.items || {};
   const A = window.READING_ANSWERS?.items || {};
+  const M = window.READING_MEMORY?.items || {};
   const QC = window.LawQuizCore, OX = window.READING_OX;
   const quizBank = QC.bank(Q,OX,R.groups), quizKey = 'civil-law-ox-v1', lawModeKey = 'civil-law-view-v1';
   const key = 'civil-case-reading-v1', main = document.getElementById('main');
@@ -18,6 +19,7 @@
   let readingLayout = 'horizontal';
   try { if(localStorage.getItem(layoutKey)==='vertical') readingLayout='vertical'; } catch {}
   let summaryOpen = false;
+  let memoryOpen = false;
   let pageViews = {}, importPending = false, lawMode = 'quick';
   let quizSession = null, quizPinned = false, quizRangeOpen = false, quizSelectedIds = [];
   try { const old = localStorage.getItem(key); if (old) records = C.validate(JSON.parse(old), new Set(byId.keys()), new Set(byGroup.keys())); }
@@ -268,20 +270,27 @@
     const same = D.cases.filter(x => x.unit === c.unit && !R.cases[x.id].supplement && CC.inView(x,lastView)), index = same.findIndex(x => x.id === c.id);
     return `${index > 0 ? `<button data-case="${same[index-1].id}">← 같은 단원 이전 문제</button>` : ''}${index >= 0 && index < same.length-1 ? `<button data-case="${same[index+1].id}">같은 단원 다음 문제 →</button>` : ''}`;
   }
-  function answerMode() { return modelOpen ? 'original' : summaryOpen ? 'summary' : 'editor'; }
-  function answerTitle(c) { return modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : summaryOpen ? '요약 답안' : '내 답안'; }
+  function answerMode() { return modelOpen ? 'original' : summaryOpen ? 'summary' : memoryOpen ? 'memory' : 'editor'; }
+  function answerTitle(c) { return modelOpen ? (R.cases[c.id].hasModelAnswer ? '모범답안 · 원문' : '원문 자료 · 답안 미수록') : summaryOpen ? '요약 답안' : memoryOpen ? '암기용 답안' : '내 답안'; }
   function answerButtons(c) {
-    const names={editor:'내 답안',summary:'요약 답안 보기',original:R.cases[c.id].hasModelAnswer?'모범답안 원문':'원문 자료'};
+    const names={editor:'내 답안',summary:'요약 답안 보기',memory:'암기용 답안',original:R.cases[c.id].hasModelAnswer?'모범답안 원문':'원문 자료'};
     return Object.entries(names).map(([mode,label])=>`<button data-answer-mode="${mode}" ${mode==='original'?'id="toggle-answer"':mode==='summary'?'id="toggle-summary"':''} aria-pressed="${answerMode()===mode}" class="${answerMode()===mode?'active':''}">${label}</button>`).join('');
   }
-  function answerContent(c) { return modelOpen ? modelMarkup(c) : summaryOpen ? summaryMarkup(c) : editor(c); }
+  function answerContent(c) { return modelOpen ? modelMarkup(c) : summaryOpen ? summaryMarkup(c) : memoryOpen ? memoryMarkup(c) : editor(c); }
+  function memoryMarkup(c) {
+    const row=M[c.id];
+    if(!row)return '<div class="panel-body"><p class="notice">암기용 답안 데이터를 불러오지 못했습니다. reading-memory-data.js 반영 후 새로고침하세요. 기존 요약·원문은 그대로 사용할 수 있습니다.</p></div>';
+    const notice={primary:'모범답안 논거를 압축한 학습용 답안 · 원문 인용 아님',partial:'원문 답안 압축 + 일부 미완성 부분의 연결 학습답 · 본문에서 구별 표시',comparison:'관련 모범답안의 논거로 구성 · 이 설문의 원문 모범답안은 아님',outline:'원문은 목차·짧은 결론만 수록 · 설명은 기존 학습 정리를 보충한 것',editorial:'원문 모범답안 미수록 · 기존 법리 정리에 기초한 학습용 보충 답안'}[row.basis];
+    const body=row.sections.map(s=>`<section class="memory-section">${s.heading==='암기용 답안'?'':`<h3>${esc(s.heading)}</h3>`}${s.points.map(p=>p.text.split(/\n\s*\n/u).map(t=>`<p>${esc(t)}</p>`).join('')).join('')}</section>`).join('');
+    return `<article class="case-memory panel-body" aria-label="이 문제의 암기용 답안"><p class="summary-provenance">${notice}</p><div class="memory-statutes" aria-label="암기 답안 관련 조문"><span>관련 조문</span>${row.statutes.map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.label)}</a>`).join('')}</div>${row.currentLaw?`<aside class="memory-caution"><strong>현행 학습 기준</strong><p>${esc(row.currentLaw.text)}</p>${(row.currentLaw.sources||[]).map(s=>`<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.title)}</a>`).join(' · ')}</aside>`:''}${row.caution?`<aside class="memory-caution"><strong>원문·학습 기준 구별</strong><p>${esc(row.caution)}</p></aside>`:''}<div class="memory-body">${body}</div>${row.sourceUnits.length?`<details class="memory-evidence"><summary>압축 전 논거·목차 대조 · 원문 ${row.coverage.sourceParagraphs}문단</summary><p class="small">아래는 교정 TXT의 답안입니다. 문단 대응은 누락 점검을 위한 것이며, 법적 완전성을 자동으로 판정한 점수는 아닙니다.</p>${row.sourceUnits.map(u=>`<div class="memory-source-unit ${u.kind==='heading'?'is-heading':''}"><p>${esc(u.text)}</p><small>${esc(u.sourceFile)} · PDF ${u.pages.join(', ')}쪽</small></div>`).join('')}</details>`:''}<div class="summary-footer"><span>요약 답안과 별도 · 논거·예외·반대설까지 암기</span><button data-answer-mode="original">${R.cases[c.id].hasModelAnswer?'모범답안 원문 보기':'원문 자료 확인'}</button><button data-answer-mode="editor" class="quiet">내 답안으로 돌아가기</button></div></article>`;
+  }
   function summaryMarkup(c) {
     const row=A[c.id];
     if(!row)return '<div class="panel-body"><p class="notice">요약 답안 데이터를 불러오지 못했습니다. 새 파일 반영 후 새로고침하거나 모범답안 원문을 확인하세요.</p></div>';
     const provenance=row.basis==='primary'?'자료와 법리 정리를 바탕으로 작성한 학습용 요약 · 원문 인용 아님':row.basis==='comparison'?'관련 답안·법리 정리를 바탕으로 작성한 학습용 구성 답 · 이 문제의 원문 모범답안 아님':'학습용 구성 답안 · 이 문제에는 원문 모범답안이 수록되어 있지 않음';
     return `<article class="case-answer-summary panel-body" aria-label="이 문제의 요약 답안"><p class="summary-provenance">${provenance}</p><div class="summary-paragraphs">${row.paragraphs.map(p=>`<p>${esc(p)}</p>`).join('')}</div>${row.note?`<p class="summary-note">${esc(row.note)}</p>`:''}${c.caution?`<details class="summary-caution"><summary>결론을 읽을 때 주의할 점</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref=>`<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)} ↗</a>`).join(' · ')}</details>`:''}<div class="summary-footer"><span>요약 질문의 결론·이유 중심 · 세부 요건·학설은 원문에서 대조</span><button data-answer-mode="original">${R.cases[c.id].hasModelAnswer?'모범답안 원문 보기':'원문 자료 확인'}</button><button data-answer-mode="editor" class="quiet">내 답안으로 돌아가기</button></div></article>`;
   }
-  function editor(c) { const draft = records.drafts[c.id] || {}; return `<textarea class="draft" id="answer-input" aria-label="내 답안 입력" placeholder="여기에 답안을 써보세요.\n\n문제의 소재 → 법리 → 사안의 적용 → 결론\n\n요약 답안·모범답안을 열어도 작성 내용은 사라지지 않습니다.">${esc(draft.text || '')}</textarea><div class="save-line"><span id="save-status">${persistError ? '저장 실패 · 내보내기 필요' : '자동 저장 준비됨'}${draft.viewed ? ' · 요약·원문 열람 기록 있음' : ''}</span><span id="char-count">${(draft.text||'').length.toLocaleString()}자</span></div>`; }
+  function editor(c) { const draft = records.drafts[c.id] || {}; return `<textarea class="draft" id="answer-input" aria-label="내 답안 입력" placeholder="여기에 답안을 써보세요.\n\n문제의 소재 → 법리 → 사안의 적용 → 결론\n\n요약·암기용·모범답안을 열어도 작성 내용은 사라지지 않습니다.">${esc(draft.text || '')}</textarea><div class="save-line"><span id="save-status">${persistError ? '저장 실패 · 내보내기 필요' : '자동 저장 준비됨'}${draft.viewed ? ' · 요약·암기용·원문 열람 기록 있음' : ''}</span><span id="char-count">${(draft.text||'').length.toLocaleString()}자</span></div>`; }
   function modelMarkup(c) {
     const available = R.cases[c.id].hasModelAnswer;
     return `${!available ? '<div class="notice">이 문제에는 교수님 모범답안이 수록되어 있지 않습니다. 아래에는 문제 원문만 보여줍니다. 이전 사이트의 생성·요약 답안을 교수님 답안으로 대신 표시하지 않습니다.</div>' : ''}${sourceViewer(c,'answer',true)}`;
@@ -365,8 +374,8 @@
     }
     if(el.dataset.answerMode&&activeCase){
       const mode=el.dataset.answerMode,c=byId.get(activeCase);
-      if(!['editor','summary','original'].includes(mode))return;
-      saveDraft(); modelOpen=mode==='original';summaryOpen=mode==='summary';
+      if(!['editor','summary','memory','original'].includes(mode))return;
+      saveDraft(); modelOpen=mode==='original';summaryOpen=mode==='summary';memoryOpen=mode==='memory';
       if(mode!=='editor'){records.drafts[c.id]={...(records.drafts[c.id]||{text:''}),viewed:true};persist();}
       // A deliberate mode switch replaces only the right pane; typed drafts stay saved.
       document.getElementById('answer-content').innerHTML=answerContent(c);
@@ -385,7 +394,7 @@
     if(el.hasAttribute('data-quiz-range')){quizRangeOpen=!quizRangeOpen;updateResults(true);if(quizRangeOpen)document.querySelector('.sidebar')?.scrollIntoView({block:'start'});return;}
     if (el.dataset.lawMode) { lawMode=['quick','detail','ox'].includes(el.dataset.lawMode)?el.dataset.lawMode:'quick'; try{localStorage.setItem(lawModeKey,lawMode);}catch{} updateResults(true); }
     if (el.dataset.quickAll) main.querySelectorAll('.quick-answer').forEach(answer=>{answer.open=el.dataset.quickAll==='show';});
-    if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; pageViews = {}; go('#case/'+el.dataset.case); }
+    if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; memoryOpen=false; pageViews = {}; go('#case/'+el.dataset.case); }
     if (el.dataset.law) { pageViews = {}; go('#law/'+el.dataset.law); }
     if (el.dataset.back) go('#'+el.dataset.back);
     if (el.dataset.unit) { filter.unit = el.dataset.unit; records.unit = filter.unit; quizPinned=false; persist(); library(location.hash === '#laws'); }
@@ -423,7 +432,7 @@
     main.classList.remove('quiz-focused');
     const [route, rawId] = location.hash.slice(1).split('/'),id=CC.routeId(rawId);
     // Direct case links and browser history must not reuse another case's PDF/page choice.
-    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;}
+    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;memoryOpen=false;}
     const view=route==='law'?'laws':route==='case'?lastView:['laws','classes'].includes(route)?route:'library';
     document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
     if (route === 'case' && byId.has(id)) reading(byId.get(id));
