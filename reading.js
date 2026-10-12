@@ -13,7 +13,10 @@
   const byGroup = new Map(R.groups.map(g => [g.id, g]));
   const esc = text => String(text ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
   let records = C.blank(), persistError = false, filter = { unit: 'all', query: '', sort: 'unit', scope: 'all', supplements: false, important:false };
-  let modelOpen = false, originalOpen = false, mobilePane = 'problem', toastTimer, activeCase = null, lastView = 'library';
+  let modelOpen = false, originalOpen = false, toastTimer, activeCase = null, lastView = 'library';
+  const layoutKey = 'civil-case-layout-v1', narrowScreen = window.matchMedia?.('(max-width: 700px)');
+  let readingLayout = 'horizontal';
+  try { if(localStorage.getItem(layoutKey)==='vertical') readingLayout='vertical'; } catch {}
   let summaryOpen = false;
   let pageViews = {}, importPending = false, lawMode = 'quick';
   let quizSession = null, quizPinned = false, quizRangeOpen = false, quizSelectedIds = [];
@@ -243,9 +246,24 @@
     const backLabel={laws:'반복 법리 목록',classes:'수업 문제 목록',library:'단원별 문제 목록'}[lastView];
     const problemButton=originalOpen?'문제 요지로 돌아가기':'원문 문제 보기';
     const problemContent=originalOpen ? sourceViewer(c,'problem') : `<div class="panel-body"><p class="small">학습용 문제 요지입니다. 교수님이 쓴 정확한 문제 문장은 ‘원문 문제 보기’에서 확인할 수 있습니다.</p><p>${esc(c.facts).replace(/\n/g,'<br>')}</p><p class="question">${esc(c.prompt).replace(/\n/g,'<br>')}</p></div>`;
-    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="mobile-switch"><button id="mobile-problem" class="${mobilePane === 'problem' ? 'active' : ''}">문제</button><button id="mobile-answer" class="${mobilePane === 'answer' ? 'active' : ''}">답안 작성·요약·원문</button></div><div class="reading-grid"><section class="panel problem ${mobilePane !== 'problem' ? 'mobile-hidden' : ''}" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section><section class="panel ${mobilePane !== 'answer' ? 'mobile-hidden' : ''}" id="answer-panel"><div class="panel-head answer-head"><h2 id="answer-title">${answerTitle(c)}</h2><div class="answer-modes" role="group" aria-label="답안 보기 방식">${answerButtons(c)}</div></div><div id="answer-content">${answerContent(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
+    main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="reading-layout-tools"><div role="group" aria-label="문제와 답안 배치"><button data-reading-layout="horizontal">좌우 배치</button><button data-reading-layout="vertical">위아래 배치</button></div><span class="small" id="reading-layout-note"></span></div><div class="reading-grid" data-layout="${readingLayout}"><section class="panel problem" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section><section class="panel" id="answer-panel"><div class="panel-head answer-head"><h2 id="answer-title">${answerTitle(c)}</h2><div class="answer-modes" role="group" aria-label="답안 보기 방식">${answerButtons(c)}</div></div><div id="answer-content">${answerContent(c)}</div></section></div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
     bindReading(c);
+    syncReadingLayout();
   }
+  function syncReadingLayout() {
+    const grid=document.querySelector('.reading-grid');
+    if(!grid)return;
+    const narrow=!!narrowScreen?.matches,layout=narrow?'vertical':readingLayout;
+    grid.setAttribute('data-layout',layout);
+    main.querySelectorAll('[data-reading-layout]').forEach(button=>{
+      const selected=button.dataset.readingLayout===layout;
+      button.classList.toggle('active',selected);
+      button.setAttribute('aria-pressed',String(selected));
+      button.disabled=narrow&&button.dataset.readingLayout==='horizontal';
+    });
+    document.getElementById('reading-layout-note').textContent=narrow?'좁은 화면에서는 문제와 답안을 위아래로 함께 보여줍니다.':layout==='vertical'?'문제가 위, 답안이 아래에 표시됩니다.':'문제와 답안을 나란히 표시합니다.';
+  }
+  narrowScreen?.addEventListener('change',syncReadingLayout);
   function neighborButtons(c) {
     const same = D.cases.filter(x => x.unit === c.unit && !R.cases[x.id].supplement && CC.inView(x,lastView)), index = same.findIndex(x => x.id === c.id);
     return `${index > 0 ? `<button data-case="${same[index-1].id}">← 같은 단원 이전 문제</button>` : ''}${index >= 0 && index < same.length-1 ? `<button data-case="${same[index+1].id}">같은 단원 다음 문제 →</button>` : ''}`;
@@ -279,13 +297,6 @@
       saveDraft();
       originalOpen=!originalOpen;
       reading(c);
-    });
-    for (const pane of ['problem','answer']) document.getElementById('mobile-'+pane).addEventListener('click', () => {
-      mobilePane = pane;
-      document.getElementById('problem-panel').classList.toggle('mobile-hidden', pane !== 'problem');
-      document.getElementById('answer-panel').classList.toggle('mobile-hidden', pane !== 'answer');
-      document.getElementById('mobile-problem').classList.toggle('active', pane === 'problem');
-      document.getElementById('mobile-answer').classList.toggle('active', pane === 'answer');
     });
     bindImages();
   }
@@ -345,6 +356,13 @@
   },true);
   main.addEventListener('click', e => {
     const el = e.target.closest('button,[data-zoom]'); if (!el) return;
+    if(el.dataset.readingLayout && activeCase){
+      if(!['horizontal','vertical'].includes(el.dataset.readingLayout)||narrowScreen?.matches&&el.dataset.readingLayout==='horizontal')return;
+      readingLayout=el.dataset.readingLayout;
+      try {localStorage.setItem(layoutKey,readingLayout);} catch {toast('화면 배치 설정을 저장하지 못했습니다. 현재 화면에서는 적용됩니다.');}
+      // Change only layout attributes; never replace the textarea or interrupt IME.
+      syncReadingLayout();return;
+    }
     if(el.dataset.answerMode&&activeCase){
       const mode=el.dataset.answerMode,c=byId.get(activeCase);
       if(!['editor','summary','original'].includes(mode))return;
@@ -367,7 +385,7 @@
     if(el.hasAttribute('data-quiz-range')){quizRangeOpen=!quizRangeOpen;updateResults(true);if(quizRangeOpen)document.querySelector('.sidebar')?.scrollIntoView({block:'start'});return;}
     if (el.dataset.lawMode) { lawMode=['quick','detail','ox'].includes(el.dataset.lawMode)?el.dataset.lawMode:'quick'; try{localStorage.setItem(lawModeKey,lawMode);}catch{} updateResults(true); }
     if (el.dataset.quickAll) main.querySelectorAll('.quick-answer').forEach(answer=>{answer.open=el.dataset.quickAll==='show';});
-    if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; mobilePane = 'problem'; pageViews = {}; go('#case/'+el.dataset.case); }
+    if (el.dataset.case) { modelOpen = false; originalOpen = false; summaryOpen=false; pageViews = {}; go('#case/'+el.dataset.case); }
     if (el.dataset.law) { pageViews = {}; go('#law/'+el.dataset.law); }
     if (el.dataset.back) go('#'+el.dataset.back);
     if (el.dataset.unit) { filter.unit = el.dataset.unit; records.unit = filter.unit; quizPinned=false; persist(); library(location.hash === '#laws'); }
@@ -405,7 +423,7 @@
     main.classList.remove('quiz-focused');
     const [route, rawId] = location.hash.slice(1).split('/'),id=CC.routeId(rawId);
     // Direct case links and browser history must not reuse another case's PDF/page choice.
-    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;mobilePane='problem';}
+    if(route==='case'&&activeCase!==id){pageViews={};modelOpen=false;originalOpen=false;summaryOpen=false;}
     const view=route==='law'?'laws':route==='case'?lastView:['laws','classes'].includes(route)?route:'library';
     document.querySelectorAll('[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === view));
     if (route === 'case' && byId.has(id)) reading(byId.get(id));
