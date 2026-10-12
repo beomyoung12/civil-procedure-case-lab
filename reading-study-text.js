@@ -20,7 +20,12 @@
   }
   function titles(value,catalog){
     const text=String(value||'');let out='',offset=0;
+    let depth=0;
     for(const ref of citations(text)){
+      for(const ch of text.slice(offset,ref.start)){
+        if('([（［'.includes(ch))depth++;
+        else if(')]）］'.includes(ch))depth=Math.max(0,depth-1);
+      }
       let title=catalog?.laws?.[ref.law]?.titles?.[ref.article];
       if(ref.from){const from=catalog?.laws?.[ref.law]?.titles?.[ref.from];title=from&&title?from+'~'+title:null;}
       const label=ref.quoted?ref.label:ref.label.replace(/^(?:민사소송법|민소법)\s*/u,'').replace(/제(?=\s*\d)/gu,'');
@@ -28,9 +33,9 @@
       // Quoted original mistakes stay quoted; do not legitimize them with a title.
       const after=text.slice(ref.end);
       if(title&&!ref.quoted&&!/^(?:\s*=|\(=)/u.test(after)){
-        // Keep particles attached to the article, not to a different title noun:
-        // "67조의" becomes "67조(=...규정)의", while "(233조)" uses "=".
-        out+=/^(?:의|에|은|는|이|가|을|를|과|와|으로|로|상)/u.test(after)?'(='+title+')':'='+title;
+        // Outside parentheses always give the title its own parentheses.
+        // Existing citation parentheses keep their compact "(233조=...)" form.
+        out+=depth===0||/^(?:의|에|은|는|이|가|을|를|과|와|으로|로|상)/u.test(after)?'(='+title+')':'='+title;
       }
       offset=ref.end;
     }

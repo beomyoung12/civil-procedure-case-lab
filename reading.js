@@ -19,7 +19,7 @@
   const layoutKey = 'civil-case-layout-v1', narrowScreen = window.matchMedia?.('(max-width: 700px)');
   let readingLayout = 'horizontal';
   try { if(localStorage.getItem(layoutKey)==='vertical') readingLayout='vertical'; } catch {}
-  const answerToolsKey='civil-case-answer-tools-v1';
+  const answerToolsKey='civil-case-answer-tools-v2';
   let answerToolsPreference=null;
   try {const value=localStorage.getItem(answerToolsKey);if(value==='open'||value==='closed')answerToolsPreference=value==='open';} catch {}
   let summaryOpen = false;
@@ -261,11 +261,12 @@
   function syncAnswerControls(){
     const controls=document.getElementById('answer-controls'),button=document.getElementById('answer-tools-toggle');
     if(!controls||!button||!activeCase)return;
-    const expanded=answerToolsPreference??(!narrowScreen?.matches&&readingLayout!=='vertical');
+    const expanded=answerToolsPreference??true;
     controls.hidden=!expanded;
+    document.getElementById('answer-panel').classList.toggle('answer-tools-collapsed',!expanded);
     button.setAttribute('aria-expanded',String(expanded));
     button.setAttribute('aria-label',`답안 선택·자료 안내 ${expanded?'접기':'펼치기'}`);
-    button.innerHTML=`<span>답안 선택·자료 안내</span><span class="answer-tools-arrow" aria-hidden="true">${expanded?'⌃':'⌄'}</span>`;
+    button.innerHTML=`<span class="answer-tools-arrow" aria-hidden="true">${expanded?'⌃':'⌄'}</span>`;
   }
   function updateAnswerContent(c,html=answerContent(c)){
     const parts=answerParts(html);
@@ -280,7 +281,7 @@
     const problemButton=originalOpen?'문제 요지로 돌아가기':'원문 문제 보기';
     const problemContent=originalOpen ? sourceViewer(c,'problem') : `<div class="panel-body"><p class="small">학습용 문제 요지입니다. 교수님이 쓴 정확한 문제 문장은 ‘원문 문제 보기’에서 확인할 수 있습니다.</p><p>${esc(c.facts).replace(/\n/g,'<br>')}</p><p class="question">${esc(c.prompt).replace(/\n/g,'<br>')}</p></div>`;
     const parts=answerParts(answerContent(c));
-    const answerPanel=`<section class="panel" id="answer-panel"><div class="panel-head answer-head"><h2 id="answer-title">${answerTitle(c)}</h2><button id="answer-tools-toggle" data-answer-tools-toggle="" aria-controls="answer-controls" aria-expanded="true"><span>답안 선택·자료 안내</span><span class="answer-tools-arrow" aria-hidden="true">⌃</span></button></div><div id="answer-controls" class="answer-controls"><div class="answer-modes" role="group" aria-label="답안 보기 방식">${answerButtons(c)}</div><div id="answer-metadata">${parts.metadata}</div></div><div id="answer-content">${parts.body}</div></section>`;
+    const answerPanel=`<section class="panel" id="answer-panel"><div class="panel-head answer-head"><h2 id="answer-title">${answerTitle(c)}</h2><button id="answer-tools-toggle" data-answer-tools-toggle="" aria-label="답안 선택·자료 안내 접기" aria-controls="answer-controls" aria-expanded="true"><span class="answer-tools-arrow" aria-hidden="true">⌃</span></button></div><div id="answer-controls" class="answer-controls"><div class="answer-modes" role="group" aria-label="답안 보기 방식">${answerButtons(c)}</div><div id="answer-metadata">${parts.metadata}</div></div><div id="answer-content">${parts.body}</div></section>`;
     main.innerHTML = `<button class="back quiet" data-back="${lastView}">← ${backLabel}</button><div class="reading-heading"><div><p class="eyebrow">${unitCode(c.unit)} · ${esc(unitName(c.unit))}</p><h1>${esc(c.title)}</h1><div class="tags">${importantBadge(c)}</div><p class="small">${esc(c.year || '정리자료')} · ${esc(bySource.get(c.sourceId).name)}${c.sourcePages.length ? ` · PDF ${c.sourcePages.join(', ')}쪽` : ''}</p></div><label class="studied"><input type="checkbox" id="case-studied" ${records.studied[c.id] ? 'checked' : ''}>공부한 문제로 표시</label></div><div class="reading-layout-tools"><div role="group" aria-label="문제와 답안 배치"><button data-reading-layout="horizontal">좌우 배치</button><button data-reading-layout="vertical">위아래 배치</button></div><span class="small" id="reading-layout-note"></span></div><div class="reading-grid" data-layout="${readingLayout}"><section class="panel problem" id="problem-panel"><div class="panel-head"><h2>${originalOpen ? '문제 원문 자료' : '문제'}</h2><button id="problem-source" class="quiet">${problemButton}</button></div><div id="problem-content">${problemContent}</div></section>${answerPanel}</div>${c.caution ? `<details class="notice"><summary>이 사례의 주의사항 · 원문과 현재 법리의 차이 확인</summary><p>${esc(c.caution)}</p>${(c.references||[]).map(ref => `<a href="${esc(ref.url)}" target="_blank" rel="noopener">${esc(ref.title)}</a>`).join(' · ')}</details>` : ''}<div class="related-links"><small>같이 익힐 반복 법리</small>${related.map(g => `<button data-law="${g.id}" class="quiet">${esc(g.title)} · 관련 ${g.caseCount}개 사례 →</button>`).join('')}</div><div class="tools" style="margin-top:22px">${neighborButtons(c)}</div>`;
     bindReading(c);
     syncReadingLayout();
